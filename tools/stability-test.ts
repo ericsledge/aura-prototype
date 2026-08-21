@@ -22,7 +22,7 @@ import { validateModelOutput } from "../lib/ai/validate";
 import { computeScoring } from "../lib/scoring";
 import { AURA_CATEGORIES, AuraCategory, Goal } from "../lib/types/aura";
 
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-terra";
 
 function fileToDataUrl(path: string): string {
   const buffer = readFileSync(path);

@@ -10,7 +10,10 @@ import { AURA_MODEL_OUTPUT_SCHEMA } from "@/lib/ai/schema";
 import { SYSTEM_PROMPT, buildUserPrompt } from "@/lib/ai/prompt";
 import { validateModelOutput } from "@/lib/ai/validate";
 
-export const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+// "gpt-4o" is no longer offered as of Aug 2026 — confirmed via
+// platform.openai.com/docs/models. gpt-5.6-terra balances intelligence and
+// cost; override with OPENAI_MODEL if a different tier fits better.
+export const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-terra";
 
 export interface AnalyzeImageInput {
   viewType: string;
