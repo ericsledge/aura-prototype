@@ -15,10 +15,11 @@ import {
   queueMissionsFromScan,
   saveComparison,
 } from "@/lib/store/auraStore";
+import { requestAnalysis } from "@/lib/ai/client";
 import { runMockAnalysis } from "@/lib/mock/mockAnalysis";
 import { computeScoring } from "@/lib/scoring";
 import { buildComparison } from "@/lib/scoring/compare";
-import { AuraCategory, PendingImage } from "@/lib/types/aura";
+import { AuraModelOutput, PendingImage } from "@/lib/types/aura";
 
 const STAGES = [
   { key: "upload", label: "Securing your photos…" },
@@ -29,6 +30,38 @@ const STAGES = [
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Real AI is the only path in production (OPENAI_API_KEY is always set on
+ * Vercel). The mock is kept as a local-dev-only fallback for contributors who
+ * haven't configured a key — never as a fallback for a real API failure, which
+ * would silently misrepresent a live scan as AI-scored when it wasn't.
+ */
+async function getModelOutput(
+  images: PendingImage[],
+  goal: NonNullable<ReturnType<typeof getDraft>["goal"]>,
+  comparabilityScore: number,
+  seedKey: string
+): Promise<{ modelOutput: AuraModelOutput; model: string }> {
+  try {
+    return await requestAnalysis(
+      images.map((i) => ({ viewType: i.viewType, dataUrl: i.dataUrl })),
+      goal
+    );
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("ai_not_configured")) {
+      console.warn("[aura] OPENAI_API_KEY not set — using mock analysis for local development only.");
+      const modelOutput = runMockAnalysis({
+        seedKey,
+        goal,
+        comparabilityScore,
+        imageIssues: images.flatMap((i) => i.qualityFlags),
+      });
+      return { modelOutput, model: "mock-v0" };
+    }
+    throw e;
+  }
 }
 
 export default function ProcessingPage() {
@@ -62,26 +95,13 @@ export default function ProcessingPage() {
       const comparabilityScore = Math.min(1, 0.5 + 0.5 * (usableCount / images.length));
       const seedKey = images.map((i) => `${i.viewType}:${i.sizeBytes}:${i.width}x${i.height}`).join("|") + `|${draft.goal}`;
 
+      // Still needed for rescan comparison later — real AI assesses the new
+      // photos entirely on their own merits, with no artificial boost toward
+      // "improvement." Only the mock's local-dev fallback ever biased scores
+      // toward active missions, and only because it has no real photos to look at.
       const baseline = draft.scanType === "rescan" && draft.baselineScanId ? await baselineScan() : null;
-      const activeMissionCategories: AuraCategory[] = [];
-      if (baseline) {
-        // Only boost categories the user actually started (or completed) a mission
-        // for — not every original recommendation. A rescan should reflect what the
-        // user chose to act on, not what Aura merely suggested (Bible §15: link
-        // observed change to logged interventions, not blanket assumption).
-        const allMissions = await listMissions();
-        allMissions
-          .filter((m) => m.sourceScanId === baseline.id && (m.status === "active" || m.status === "completed"))
-          .forEach((m) => activeMissionCategories.push(m.category));
-      }
 
-      const modelOutput = runMockAnalysis({
-        seedKey,
-        goal: draft.goal ?? "overall_improvement",
-        comparabilityScore,
-        imageIssues: images.flatMap((i) => i.qualityFlags),
-        baseline: baseline?.scoring ? { scoring: baseline.scoring, activeMissionCategories } : undefined,
-      });
+      const { modelOutput, model } = await getModelOutput(images, draft.goal ?? "overall_improvement", comparabilityScore, seedKey);
       await delay(600);
 
       setStageIndex(2);
@@ -97,7 +117,7 @@ export default function ProcessingPage() {
         images,
         modelOutput,
         scoring,
-        modelVersion: "mock-v0",
+        modelVersion: model,
       });
       await queueMissionsFromScan(scan);
       sessionStorage.removeItem("aura.pendingScanImages");

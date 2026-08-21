@@ -49,9 +49,18 @@ export default function Landing() {
       </div>
 
       <div className="flex flex-col items-center gap-4">
-        <OvrDial score={68} confidence="medium" size={200} />
+        <span className="text-xs uppercase tracking-[0.2em] text-accent-soft">Example progression</span>
+        <div className="flex items-center gap-6">
+          <div className="text-center">
+            <p className="text-xs text-muted">Starting Aura</p>
+            <p className="text-3xl font-bold tabular-nums text-muted">68</p>
+          </div>
+          <span className="text-2xl text-muted">→</span>
+          <OvrDial score={82} confidence="high" size={180} delta={14} />
+        </div>
         <p className="max-w-sm text-sm text-muted">
-          Example reveal — your real score comes from your own standardized photos.
+          Two upgrades, one rescan. Your real score comes from your own standardized photos — this is what
+          progress looks like once you act on it.
         </p>
       </div>
 
