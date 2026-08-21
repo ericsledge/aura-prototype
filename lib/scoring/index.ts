@@ -27,8 +27,12 @@ export const RUBRIC_VERSION = "aura-rubric-v0.3";
 // Presence mixing capture quality into the person's score, and Facial
 // Hair/Skin Grooming reading as duplicate "grooming" stats) with 6 distinct
 // stats: Face, Hair, Style, Physique, Presence, Details. Photo Presence
-// became Scan Quality, tracked separately and never part of OVR.
-export const SCORING_VERSION = "aura-scoring-v0.3";
+// became Scan Quality, tracked separately and never part of OVR. v0.4:
+// removed the confidence/comparability score multiplier entirely — coupling
+// the score to confidence made the score inherit confidence's own
+// volatility (see the comment in computeScoring for the stability-test
+// evidence). Confidence is now a pure, separate signal, never a multiplier.
+export const SCORING_VERSION = "aura-scoring-v0.4";
 // Weights are versioned independently of the rubric so they can be
 // recalibrated later without implying the underlying category definitions
 // changed too.
@@ -59,36 +63,39 @@ const CATEGORY_WEIGHTS: Record<AuraCategory, number> = {
   details: 0.15,
 };
 
-const CONFIDENCE_PENALTY: Record<Confidence, number> = {
-  high: 1,
-  medium: 0.97,
-  low: 0.92,
-};
-
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
 
 /**
- * Overall confidence is driven by comparability first, then how many
- * categories individually landed low — NOT the single worst category.
- * A strict "weakest link" rule was previously used here and made overall
- * confidence read "low" on nearly every scan (with several independent
- * per-category rolls, the odds that *at least one* lands low are high even
- * when the input is perfectly comparable) — technically defensible but
+ * Combines several independent confidence signals into one — driven by
+ * comparability first, then what SHARE of the signals landed low, never a
+ * single weakest link. A strict "weakest link" rule was originally used for
+ * overall confidence (across 6 categories) and made it read "low" on nearly
+ * every scan — with several independent rolls, the odds that *at least one*
+ * lands low are high even when the input is perfectly comparable. That's
  * functionally indistinguishable from "always low," which trains users to
- * ignore the confidence label entirely. A few individually-uncertain
- * categories no longer sink the whole scan; genuinely widespread
- * uncertainty still does.
+ * ignore the label entirely.
+ *
+ * Ratios (not raw counts) so the same function works whether it's combining
+ * 6 category confidences into an overall figure, or — just as importantly —
+ * combining a single category's 2-4 submetric confidences into that
+ * category's own displayed confidence. That second use is the fix for a
+ * real gap: the score itself moved off one free model judgment onto
+ * deterministic submetric averaging, but the confidence *label* next to
+ * each category was still whatever the model separately wrote for that one
+ * field, uncorrelated with the submetrics underneath it and just as prone
+ * to the same weakest-link problem this function already solves once.
  */
-function combineConfidence(categories: Confidence[], comparabilityScore: number): Confidence {
+function combineConfidence(signals: Confidence[], comparabilityScore: number): Confidence {
   if (comparabilityScore < 0.55) return "low";
+  if (signals.length === 0) return "low";
 
-  const lowCount = categories.filter((c) => c === "low").length;
-  const highCount = categories.filter((c) => c === "high").length;
+  const lowRatio = signals.filter((c) => c === "low").length / signals.length;
+  const highRatio = signals.filter((c) => c === "high").length / signals.length;
 
-  if (lowCount >= 3) return "low";
-  if (lowCount <= 1 && highCount >= categories.length - 1) return "high";
+  if (lowRatio >= 0.5) return "low";
+  if (lowRatio <= 0.2 && highRatio >= 0.75) return "high";
   return "medium";
 }
 
@@ -97,10 +104,21 @@ function combineConfidence(categories: Confidence[], comparabilityScore: number)
  * Deterministic: identical input always yields identical output.
  */
 export function computeScoring(model: AuraModelOutput): ScoringResult {
-  const penaltyMultiplier = (confidence: Confidence) => {
-    const comparabilityPenalty = 0.85 + 0.15 * model.scan_quality.comparability_score;
-    return CONFIDENCE_PENALTY[confidence] * comparabilityPenalty;
-  };
+  // Confidence and comparability are deliberately NOT folded into the score
+  // as multipliers. They used to be (confidence: high=1x, medium=0.97x,
+  // low=0.92x; comparability: 0.85-1.0x) — but a measurement and how much
+  // you trust it are two different things, and coupling them made the score
+  // *less* stable, not more: this project's own stability test caught it
+  // directly (deriving confidence from more independent submetric signals
+  // made confidence itself more volatile run-to-run, and because it
+  // multiplied the score, that volatility transmitted straight into the
+  // number — one run's OVR range went from 3 to 12 points on the exact same
+  // photos the moment this coupling existed). It also contradicted the
+  // product rule already given to the model: "a poorly-lit photo should
+  // lower confidence and scan_quality, not the person's scores." Confidence
+  // and comparability still gate/inform elsewhere (Scan Quality rating,
+  // rescan comparison thresholds, the confidence label itself) — they just
+  // don't scale the number anymore.
 
   // Shared by all six categories: average the named submetric tiers, then
   // apply the category's own small bounded adjustment on top. Details used
@@ -110,7 +128,9 @@ export function computeScoring(model: AuraModelOutput): ScoringResult {
   // averaging as everything else.
   function scoreFromSubmetrics(
     cat: AuraCategory,
-    raw: { submetrics: { tier: ScoreTier }[]; tier_adjustment: number; confidence: Confidence; evidence: string[]; controllable_factors: string[] } | undefined
+    raw:
+      | { submetrics: { tier: ScoreTier; confidence: Confidence }[]; tier_adjustment: number; confidence: Confidence; evidence: string[]; controllable_factors: string[] }
+      | undefined
   ): CategoryScore {
     if (!raw) {
       return { category: cat, score: 60, confidence: "low" as Confidence, evidence: [], controllableFactors: [] };
@@ -118,11 +138,17 @@ export function computeScoring(model: AuraModelOutput): ScoringResult {
     const submetricAverage =
       raw.submetrics.reduce((sum, s) => sum + TIER_BASE[s.tier], 0) / Math.max(1, raw.submetrics.length);
     const tierScore = submetricAverage + clamp(raw.tier_adjustment, -5, 5);
-    const score = clamp(Math.round(tierScore * penaltyMultiplier(raw.confidence)), 0, 100);
+    // Derived from the submetrics themselves, not the model's separate
+    // category-level confidence field — see the combineConfidence comment.
+    const confidence = combineConfidence(
+      raw.submetrics.map((s) => s.confidence),
+      model.scan_quality.comparability_score
+    );
+    const score = clamp(Math.round(tierScore), 0, 100);
     return {
       category: cat,
       score,
-      confidence: raw.confidence,
+      confidence,
       evidence: raw.evidence,
       controllableFactors: raw.controllable_factors,
     };

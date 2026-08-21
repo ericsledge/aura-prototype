@@ -67,6 +67,9 @@ async function main() {
   const categoryScores: Record<AuraCategory, number[]> = Object.fromEntries(
     AURA_CATEGORIES.map((c) => [c, [] as number[]])
   ) as Record<AuraCategory, number[]>;
+  const categoryConfidences: Record<AuraCategory, string[]> = Object.fromEntries(
+    AURA_CATEGORIES.map((c) => [c, [] as string[]])
+  ) as Record<AuraCategory, string[]>;
 
   for (let i = 0; i < runs; i++) {
     process.stdout.write(`  run ${i + 1}/${runs}... `);
@@ -87,7 +90,10 @@ async function main() {
     const scoring = computeScoring(modelOutput);
 
     overallScores.push(scoring.overallScore);
-    for (const c of scoring.categories) categoryScores[c.category].push(c.score);
+    for (const c of scoring.categories) {
+      categoryScores[c.category].push(c.score);
+      categoryConfidences[c.category].push(c.confidence);
+    }
     console.log(`OVR ${scoring.overallScore} (${scoring.overallConfidence})`);
   }
 
@@ -99,7 +105,10 @@ async function main() {
   console.log("\n--- Per category ---");
   for (const c of AURA_CATEGORIES) {
     const s = stats(categoryScores[c]);
-    console.log(`${c.padEnd(22)} ${categoryScores[c].join(", ").padEnd(20)} range=${s.range} ${s.range <= 5 ? "PASS" : "FAIL"}`);
+    const confSummary = categoryConfidences[c].join(",");
+    console.log(
+      `${c.padEnd(22)} ${categoryScores[c].join(", ").padEnd(20)} range=${s.range} ${s.range <= 5 ? "PASS" : "FAIL"}  conf=[${confSummary}]`
+    );
   }
 }
 
