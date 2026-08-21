@@ -2,23 +2,20 @@
 
 import { useState } from "react";
 import { Card } from "@/components/ui/Card";
-import { getUserId, saveFeedback } from "@/lib/store/auraStore";
+import { saveFeedback } from "@/lib/store/auraStore";
 
 // Pilot protocol (Bible §82) explicitly wants to know what felt fake or accurate.
 // This is the cheapest possible capture of that signal, tied to the exact scan.
 export function FeedbackPrompt({ scanId }: { scanId: string }) {
   const [answer, setAnswer] = useState<"helpful" | "not_helpful" | null>(null);
 
-  function submit(scoreFeltStable: boolean) {
-    saveFeedback({
-      id: crypto.randomUUID(),
-      userId: getUserId(),
+  async function submit(scoreFeltStable: boolean) {
+    await saveFeedback({
       scanId,
       helpful: null,
       scoreFeltStable,
       recommendationUsed: null,
       notes: "",
-      createdAt: new Date().toISOString(),
     });
     setAnswer(scoreFeltStable ? "helpful" : "not_helpful");
   }

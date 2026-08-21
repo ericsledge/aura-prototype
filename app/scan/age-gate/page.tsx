@@ -18,8 +18,8 @@ export default function AgeGatePage() {
 
   const canContinue = ageConfirmed && rightsConfirmed;
 
-  function handleContinue() {
-    saveProfile({ ageGateConfirmed: true });
+  async function handleContinue() {
+    await saveProfile({ ageGateConfirmed: true });
     track("age_confirmed");
     router.push("/scan/goal");
   }

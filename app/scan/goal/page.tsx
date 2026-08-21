@@ -20,10 +20,10 @@ export default function GoalPage() {
   const router = useRouter();
   const [selected, setSelected] = useState<Goal | null>(null);
 
-  function handleContinue() {
+  async function handleContinue() {
     if (!selected) return;
     saveDraft({ scanType: "baseline", baselineScanId: null, goal: selected });
-    saveProfile({ primaryGoal: selected });
+    await saveProfile({ primaryGoal: selected });
     router.push("/scan/capture-tutorial");
   }
 

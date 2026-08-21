@@ -6,26 +6,26 @@ import { LinkButton } from "@/components/ui/Button";
 import { OvrDial } from "@/components/aura/OvrDial";
 import { track } from "@/lib/analytics/events";
 import { baselineScan } from "@/lib/store/auraStore";
-import { useHydrated } from "@/lib/hooks/useHydrated";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 
 export default function Landing() {
   const router = useRouter();
-  const hydrated = useHydrated();
-  const returning = hydrated ? !!baselineScan() : false;
+  const { data: baseline, loading } = useAsyncData(baselineScan, []);
+  const returning = !loading && !!baseline;
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (loading) return;
     if (returning) {
       router.replace("/journey");
     } else {
       track("landing_viewed");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per hydration/returning-status change
-  }, [hydrated, returning]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per load/returning-status change
+  }, [loading, returning]);
 
   // Returning users never see the marketing page — they already know what
   // Aura is. Render nothing while the redirect to their dashboard happens.
-  if (!hydrated || returning) return null;
+  if (loading || returning) return null;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col items-center gap-14 px-5 pb-24 pt-16 text-center">

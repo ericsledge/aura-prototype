@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Header } from "@/components/aura/Header";
+import { AuthGate } from "@/components/aura/AuthGate";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,7 +24,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <Header />
-        <main className="flex-1">{children}</main>
+        <main className="flex-1">
+          <AuthGate>{children}</AuthGate>
+        </main>
       </body>
     </html>
   );

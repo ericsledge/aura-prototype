@@ -6,44 +6,40 @@ import { Badge, Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { deleteAllData, deleteScan, listScans } from "@/lib/store/auraStore";
 import { track } from "@/lib/analytics/events";
-import { useHydrated } from "@/lib/hooks/useHydrated";
-import { useRefresh } from "@/lib/hooks/useRefresh";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 
 export default function PrivacyPage() {
   const router = useRouter();
-  const hydrated = useHydrated();
-  const [, refresh] = useRefresh();
   const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
+  const { data: scans, loading, refetch } = useAsyncData(listScans, []);
 
-  const scans = hydrated ? listScans() : [];
-
-  function handleDeleteScan(id: string) {
-    deleteScan(id);
+  async function handleDeleteScan(id: string) {
+    await deleteScan(id);
     track("scan_deleted", { scanId: id });
-    refresh();
+    refetch();
   }
 
-  function handleDeleteAll() {
+  async function handleDeleteAll() {
     track("account_deleted");
-    deleteAllData();
+    await deleteAllData();
     router.push("/");
   }
 
-  if (!hydrated) return null;
+  if (loading) return null;
 
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-8 px-5 py-10">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Privacy &amp; Data Controls</h1>
         <p className="mt-2 text-sm text-muted">
-          In this prototype, your photos and scan data are stored only on this device (browser local storage) —
-          nothing is uploaded to a server yet. You can delete any individual scan or everything at once.
+          Your photos are stored in a private bucket only you can access, and your scan data is protected by
+          row-level security tied to your account. You can delete any individual scan or everything at once.
         </p>
       </div>
 
       <div>
         <h2 className="mb-3 text-sm font-medium text-muted">Your scans</h2>
-        {scans.length === 0 ? (
+        {!scans || scans.length === 0 ? (
           <Card className="text-sm text-muted">No scans stored.</Card>
         ) : (
           <div className="flex flex-col gap-2">
@@ -67,8 +63,7 @@ export default function PrivacyPage() {
       <Card className="flex flex-col gap-3 border-danger/30">
         <h2 className="font-medium text-danger">Delete everything</h2>
         <p className="text-sm text-muted">
-          Permanently deletes all your scans, photos, missions, and account data from this device. This cannot be
-          undone.
+          Permanently deletes all your scans, photos, missions, and account data. This cannot be undone.
         </p>
         {!confirmingDeleteAll ? (
           <Button variant="danger" onClick={() => setConfirmingDeleteAll(true)}>

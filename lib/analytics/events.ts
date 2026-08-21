@@ -1,9 +1,12 @@
-// Minimal typed analytics tracker (Bible §5, master spec event list).
-// Stage 3: logs to console + localStorage so events are inspectable during
-// usability testing. Swap `emit` for a real provider (PostHog etc.) later —
-// call sites never change.
+// Typed analytics tracker (Bible §5, master spec event list).
+// Writes to Supabase (so the founder can see aggregate tester behavior, not
+// just each tester's own browser) and mirrors to localStorage for local
+// debugging. Fire-and-forget by design — a dropped analytics write should
+// never block or fail the actual user action.
 
 "use client";
+
+import { createClient } from "@/lib/supabase/client";
 
 export type AuraEventName =
   | "landing_viewed"
@@ -56,6 +59,14 @@ export function track(event: AuraEventName, properties: Record<string, unknown> 
   if (process.env.NODE_ENV !== "production") {
     console.debug("[analytics]", event, properties);
   }
+
+  // Best-effort: requires an existing session (AuthGate guarantees one exists
+  // before any page renders). Never awaited by callers, never throws.
+  const supabase = createClient();
+  supabase.auth.getUser().then(({ data }) => {
+    if (!data.user) return;
+    supabase.from("analytics_events").insert({ user_id: data.user.id, event, properties }).then(() => {});
+  });
 }
 
 export function readEvents(): { event: AuraEventName; properties: Record<string, unknown>; timestamp: string }[] {

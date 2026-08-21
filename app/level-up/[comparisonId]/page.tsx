@@ -8,7 +8,7 @@ import { OvrDial } from "@/components/aura/OvrDial";
 import { FeedbackPrompt } from "@/components/aura/FeedbackPrompt";
 import { getComparison, getScan, suggestedMissions } from "@/lib/store/auraStore";
 import { track } from "@/lib/analytics/events";
-import { useHydrated } from "@/lib/hooks/useHydrated";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 
 const CALL_LABEL: Record<string, string> = {
   confirmed_improvement: "Improved",
@@ -26,25 +26,31 @@ const CALL_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = 
   not_comparable: "warning",
 };
 
+async function loadLevelUpData(comparisonId: string) {
+  const comparison = await getComparison(comparisonId);
+  if (!comparison) return { comparison: null, baseline: null, current: null, nextMission: null };
+  const [baseline, current, queued] = await Promise.all([
+    getScan(comparison.baselineScanId),
+    getScan(comparison.currentScanId),
+    suggestedMissions(),
+  ]);
+  return { comparison, baseline, current, nextMission: queued[0] ?? null };
+}
+
 export default function LevelUpPage(props: PageProps<"/level-up/[comparisonId]">) {
   const { comparisonId } = use(props.params);
-  const hydrated = useHydrated();
-
-  const comparison = hydrated ? getComparison(comparisonId) : null;
-  const baseline = comparison ? getScan(comparison.baselineScanId) : null;
-  const current = comparison ? getScan(comparison.currentScanId) : null;
+  const { data, loading } = useAsyncData(() => loadLevelUpData(comparisonId), [comparisonId]);
 
   useEffect(() => {
-    if (comparison) track("comparison_viewed", { comparisonId: comparison.id });
+    if (data?.comparison) track("comparison_viewed", { comparisonId: data.comparison.id });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when data becomes available
-  }, [hydrated, comparisonId]);
+  }, [data?.comparison?.id]);
 
-  if (!hydrated) return null;
+  if (loading || !data) return null;
+  const { comparison, baseline, current, nextMission } = data;
   if (!comparison || !baseline || !current) {
     return <div className="mx-auto max-w-lg px-5 py-16 text-center text-muted">We couldn&apos;t find that comparison.</div>;
   }
-
-  const nextMission = suggestedMissions()[0] ?? null;
 
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-8 px-5 py-10">

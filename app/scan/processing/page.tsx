@@ -8,18 +8,17 @@ import {
   awardXp,
   baselineScan,
   clearDraft,
+  createScan,
   getDraft,
-  getUserId,
   listMissions,
   listScans,
   queueMissionsFromScan,
   saveComparison,
-  saveScan,
 } from "@/lib/store/auraStore";
 import { runMockAnalysis } from "@/lib/mock/mockAnalysis";
-import { computeScoring, RUBRIC_VERSION, SCORING_VERSION } from "@/lib/scoring";
+import { computeScoring } from "@/lib/scoring";
 import { buildComparison } from "@/lib/scoring/compare";
-import { AuraCategory, PendingImage, Scan, ScanImageMeta } from "@/lib/types/aura";
+import { AuraCategory, PendingImage } from "@/lib/types/aura";
 
 const STAGES = [
   { key: "upload", label: "Securing your photos…" },
@@ -63,14 +62,15 @@ export default function ProcessingPage() {
       const comparabilityScore = Math.min(1, 0.5 + 0.5 * (usableCount / images.length));
       const seedKey = images.map((i) => `${i.viewType}:${i.sizeBytes}:${i.width}x${i.height}`).join("|") + `|${draft.goal}`;
 
-      const baseline = draft.scanType === "rescan" && draft.baselineScanId ? baselineScan() : null;
+      const baseline = draft.scanType === "rescan" && draft.baselineScanId ? await baselineScan() : null;
       const activeMissionCategories: AuraCategory[] = [];
       if (baseline) {
         // Only boost categories the user actually started (or completed) a mission
         // for — not every original recommendation. A rescan should reflect what the
         // user chose to act on, not what Aura merely suggested (Bible §15: link
         // observed change to logged interventions, not blanket assumption).
-        listMissions()
+        const allMissions = await listMissions();
+        allMissions
           .filter((m) => m.sourceScanId === baseline.id && (m.status === "active" || m.status === "completed"))
           .forEach((m) => activeMissionCategories.push(m.category));
       }
@@ -89,61 +89,42 @@ export default function ProcessingPage() {
       await delay(500);
 
       setStageIndex(3);
-      await delay(500);
 
-      const scanImages: ScanImageMeta[] = images.map((i) => ({
-        viewType: i.viewType,
-        fileName: `${i.viewType}.jpg`,
-        width: i.width,
-        height: i.height,
-        sizeBytes: i.sizeBytes,
-        qualityFlags: i.qualityFlags,
-        dataUrl: i.dataUrl,
-      }));
-
-      const scan: Scan = {
-        id: crypto.randomUUID(),
-        userId: getUserId(),
+      const scan = await createScan({
         scanType: draft.scanType,
-        status: "complete",
         goal: draft.goal ?? "overall_improvement",
         baselineScanId: draft.scanType === "rescan" ? draft.baselineScanId : null,
-        images: scanImages,
+        images,
         modelOutput,
         scoring,
         modelVersion: "mock-v0",
-        rubricVersion: RUBRIC_VERSION,
-        scoringVersion: SCORING_VERSION,
-        createdAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-      };
-      saveScan(scan);
-      queueMissionsFromScan(scan);
+      });
+      await queueMissionsFromScan(scan);
       sessionStorage.removeItem("aura.pendingScanImages");
 
       track("scan_analysis_completed", { scanId: scan.id, ovr: scoring.overallScore, scanType: scan.scanType });
 
-      const totalScans = listScans().length;
+      const totalScans = (await listScans()).length;
       if (totalScans === 1) track("first_scan_completed");
       if (totalScans === 2) track("second_scan_completed");
       if (totalScans === 3) track("third_scan_completed");
 
       if (draft.scanType === "rescan" && baseline) {
-        const comparison = buildComparison(baseline, scan, listMissions());
-        saveComparison(comparison);
+        const allMissions = await listMissions();
+        const comparison = await saveComparison(buildComparison(baseline, scan, allMissions));
         track("rescan_completed", { comparisonId: comparison.id });
 
         if (comparison.comparabilityScore >= 0.55) {
-          awardXp("valid_comparison_scan");
+          await awardXp("valid_comparison_scan");
         }
         const anyConfirmedImprovement = comparison.categoryDeltas.some(
           (d) => d.call === "confirmed_improvement" || d.call === "likely_improvement"
         );
         if (anyConfirmedImprovement) {
-          awardXp("first_confirmed_improvement", "bonus:first_confirmed_improvement");
+          await awardXp("first_confirmed_improvement", "bonus:first_confirmed_improvement");
         }
         if (scoring.overallScore - baseline.scoring!.overallScore >= 5) {
-          awardXp("plus5_from_baseline", "bonus:plus5_from_baseline");
+          await awardXp("plus5_from_baseline", "bonus:plus5_from_baseline");
         }
 
         clearDraft();

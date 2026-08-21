@@ -9,8 +9,7 @@ import { awardXp, baselineScan, getMission, getXpTotal, saveDraft, saveMission, 
 import { computeLevel } from "@/lib/gamification/xp";
 import { gearForCategory } from "@/lib/mock/gear";
 import { track } from "@/lib/analytics/events";
-import { useHydrated } from "@/lib/hooks/useHydrated";
-import { useRefresh } from "@/lib/hooks/useRefresh";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 
 const IMPACT_TONE: Record<ImpactBand, "success" | "warning" | "neutral"> = {
   high: "success",
@@ -24,22 +23,28 @@ const EFFORT_LABEL: Record<EffortBand, string> = {
   high: "High effort",
 };
 
+async function loadMissionData(missionId: string) {
+  const [mission, baseline, xpTotal, queued] = await Promise.all([
+    getMission(missionId),
+    baselineScan(),
+    getXpTotal(),
+    suggestedMissions(),
+  ]);
+  return { mission, baseline, xpTotal, nextQueued: queued[0] ?? null };
+}
+
 export default function MissionDetailPage(props: PageProps<"/missions/[missionId]">) {
   const { missionId } = use(props.params);
   const router = useRouter();
-  const hydrated = useHydrated();
-  const [, refresh] = useRefresh();
+  const { data, loading, refetch } = useAsyncData(() => loadMissionData(missionId), [missionId]);
   const [showGear, setShowGear] = useState(false);
   const [justCompleted, setJustCompleted] = useState(false);
 
-  const mission = hydrated ? getMission(missionId) : null;
-  const baseline = hydrated ? baselineScan() : null;
-  const xpTotal = hydrated ? getXpTotal() : 0;
+  if (loading || !data) return null;
+  const { mission, baseline, xpTotal, nextQueued } = data;
   const level = computeLevel(xpTotal);
-  const nextQueued = hydrated ? suggestedMissions()[0] : null;
   const gear = mission ? gearForCategory(mission.category) : [];
 
-  if (!hydrated) return null;
   if (!mission) {
     return (
       <div className="mx-auto max-w-lg px-5 py-16 text-center text-muted">
@@ -51,26 +56,27 @@ export default function MissionDetailPage(props: PageProps<"/missions/[missionId
     );
   }
 
-  function toggleStep(stepId: string) {
+  async function toggleStep(stepId: string) {
     const updatedSteps = mission!.steps.map((s) => {
       if (s.id !== stepId) return s;
       const completed = !s.completed;
-      if (completed) {
-        awardXp("mission_step_completed");
-        track("mission_step_completed", { missionId: mission!.id, stepId });
-      }
       return { ...s, completed, completedAt: completed ? new Date().toISOString() : null };
     });
-    saveMission({ ...mission!, steps: updatedSteps });
-    refresh();
+    const toggled = updatedSteps.find((s) => s.id === stepId)!;
+    await saveMission({ ...mission!, steps: updatedSteps });
+    if (toggled.completed) {
+      await awardXp("mission_step_completed");
+      track("mission_step_completed", { missionId: mission!.id, stepId });
+    }
+    refetch();
   }
 
-  function complete() {
-    saveMission({ ...mission!, status: "completed", completedAt: new Date().toISOString() });
-    awardXp("mission_completed");
+  async function complete() {
+    await saveMission({ ...mission!, status: "completed", completedAt: new Date().toISOString() });
+    await awardXp("mission_completed");
     track("mission_completed", { missionId: mission!.id, category: mission!.category });
     setJustCompleted(true);
-    refresh();
+    refetch();
   }
 
   function compareNow() {

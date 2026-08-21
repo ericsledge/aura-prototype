@@ -7,47 +7,42 @@ import { Button, LinkButton } from "@/components/ui/Button";
 import { OvrDial } from "@/components/aura/OvrDial";
 import { CategoryBar } from "@/components/aura/CategoryBar";
 import { MissionSummaryCard } from "@/components/aura/MissionCard";
-import {
-  activeMissions,
-  awardXp,
-  baselineScan,
-  getXpTotal,
-  latestCompleteScan,
-  listMissions,
-  listScans,
-  saveDraft,
-  saveMission,
-  suggestedMissions,
-} from "@/lib/store/auraStore";
+import { awardXp, getXpTotal, listMissions, listScans, saveDraft, saveMission } from "@/lib/store/auraStore";
 import { track } from "@/lib/analytics/events";
-import { useHydrated } from "@/lib/hooks/useHydrated";
-import { useRefresh } from "@/lib/hooks/useRefresh";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 import { daysSince } from "@/lib/utils/time";
 import { computeLevel } from "@/lib/gamification/xp";
 import { nextMilestone } from "@/lib/gamification/milestones";
 import { computeAchievements } from "@/lib/gamification/achievements";
-import { CATEGORY_LABELS, Mission } from "@/lib/types/aura";
+import { CATEGORY_LABELS, Mission, Scan } from "@/lib/types/aura";
+
+async function loadJourneyData() {
+  const [scans, allMissions, xpTotal] = await Promise.all([listScans(), listMissions(), getXpTotal()]);
+  return { scans, allMissions, xpTotal };
+}
 
 export default function JourneyPage() {
   const router = useRouter();
-  const hydrated = useHydrated();
-  const [, refresh] = useRefresh();
+  const { data, loading, refetch } = useAsyncData(loadJourneyData, []);
 
   useEffect(() => {
-    if (hydrated) track("journey_viewed");
-  }, [hydrated]);
+    if (data) track("journey_viewed");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when data becomes available
+  }, [!!data]);
 
-  if (!hydrated) return null;
+  if (loading || !data) return null;
 
-  const scans = listScans();
-  const completeScans = scans.filter((s) => s.status === "complete" && s.scoring);
-  const latest = latestCompleteScan();
-  const baseline = baselineScan();
-  const allMissions = listMissions();
-  const missions = activeMissions();
-  const queued = suggestedMissions();
-  const completedMissions = allMissions.filter((m) => m.status === "completed");
-  const xpTotal = getXpTotal();
+  const { scans, allMissions, xpTotal } = data;
+  const completeScans = scans.filter((s: Scan) => s.status === "complete" && s.scoring);
+  const latest = completeScans.length ? completeScans[completeScans.length - 1] : null;
+  const baseline = completeScans.find((s: Scan) => s.scanType === "baseline") ?? null;
+  const missions = allMissions
+    .filter((m: Mission) => m.status === "active")
+    .sort((a: Mission, b: Mission) => new Date(a.startedAt ?? 0).getTime() - new Date(b.startedAt ?? 0).getTime());
+  const queued = allMissions
+    .filter((m: Mission) => m.status === "suggested")
+    .sort((a: Mission, b: Mission) => a.queuePosition - b.queuePosition);
+  const completedMissions = allMissions.filter((m: Mission) => m.status === "completed");
   const level = computeLevel(xpTotal);
   const achievements = computeAchievements(scans, allMissions);
 
@@ -62,7 +57,7 @@ export default function JourneyPage() {
   }
 
   const daysSinceLatest = daysSince(latest.createdAt);
-  const scores = completeScans.map((s) => s.scoring!.overallScore);
+  const scores = completeScans.map((s: Scan) => s.scoring!.overallScore);
   const personalBest = Math.max(...scores);
   const previousScan = completeScans.length > 1 ? completeScans[completeScans.length - 2] : null;
   const deltaSinceLast = previousScan ? latest.scoring!.overallScore - previousScan.scoring!.overallScore : null;
@@ -77,19 +72,19 @@ export default function JourneyPage() {
     router.push("/scan/capture-tutorial");
   }
 
-  function completeMission(mission: Mission) {
-    saveMission({ ...mission, status: "completed", completedAt: new Date().toISOString() });
-    awardXp("mission_completed");
+  async function completeMission(mission: Mission) {
+    await saveMission({ ...mission, status: "completed", completedAt: new Date().toISOString() });
+    await awardXp("mission_completed");
     track("mission_completed", { missionId: mission.id, category: mission.category });
-    refresh();
+    refetch();
   }
 
-  function startQueuedMission(mission: Mission) {
+  async function startQueuedMission(mission: Mission) {
     const alreadyStartedOne = missions.length > 0 || completedMissions.length > 0;
-    saveMission({ ...mission, status: "active", startedAt: new Date().toISOString() });
-    awardXp("mission_started");
+    await saveMission({ ...mission, status: "active", startedAt: new Date().toISOString() });
+    await awardXp("mission_started");
     track(alreadyStartedOne ? "next_mission_started" : "mission_started", { missionId: mission.id, category: mission.category });
-    refresh();
+    refetch();
   }
 
   return (
@@ -139,7 +134,7 @@ export default function JourneyPage() {
           <MissionSummaryCard mission={currentMission} onComplete={() => completeMission(currentMission)} />
           {otherActive.length > 0 && (
             <div className="mt-2 flex flex-col gap-2">
-              {otherActive.map((m) => (
+              {otherActive.map((m: Mission) => (
                 <MissionSummaryCard key={m.id} mission={m} onComplete={() => completeMission(m)} />
               ))}
             </div>
@@ -149,7 +144,7 @@ export default function JourneyPage() {
         <div>
           <h2 className="mb-3 text-sm font-medium text-muted">Choose Your Next Mission</h2>
           <div className="flex flex-col gap-2">
-            {queued.map((m) => (
+            {queued.map((m: Mission) => (
               <Card key={m.id} className="flex items-center justify-between gap-3">
                 <div>
                   <span className="text-xs uppercase tracking-wide text-muted">{CATEGORY_LABELS[m.category]}</span>
@@ -170,7 +165,7 @@ export default function JourneyPage() {
         <div>
           <h2 className="mb-3 text-sm font-medium text-muted">Mission Queue</h2>
           <div className="flex flex-col gap-2">
-            {queued.map((m, i) => (
+            {queued.map((m: Mission, i: number) => (
               <Card key={m.id} className="flex items-center justify-between gap-3">
                 <div>
                   <Badge>{i === 0 ? "Up Next" : "Later"}</Badge>
@@ -248,7 +243,7 @@ export default function JourneyPage() {
       <div>
         <h2 className="mb-3 text-sm font-medium text-muted">Scan history</h2>
         <div className="flex flex-col gap-2">
-          {[...scans].reverse().map((s) => (
+          {[...scans].reverse().map((s: Scan) => (
             <div key={s.id} className="flex items-center justify-between rounded-2xl border border-border-subtle bg-surface p-4">
               <div>
                 <p className="text-sm font-medium">

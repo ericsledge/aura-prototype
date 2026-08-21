@@ -127,7 +127,7 @@ export interface ScanImageMeta {
   height: number;
   sizeBytes: number;
   qualityFlags: string[];
-  dataUrl: string; // Stage 3 only: local object URL / data URL. Stage 5 replaces with private storage path.
+  storagePath: string; // Path in the private "scan-photos" Supabase Storage bucket.
 }
 
 export interface Scan {

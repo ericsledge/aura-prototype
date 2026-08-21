@@ -8,20 +8,19 @@ import { Button, LinkButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { getScan } from "@/lib/store/auraStore";
 import { track } from "@/lib/analytics/events";
-import { useHydrated } from "@/lib/hooks/useHydrated";
+import { useAsyncData } from "@/lib/hooks/useAsyncData";
 
 export default function RevealPage(props: PageProps<"/scan/reveal/[scanId]">) {
   const { scanId } = use(props.params);
   const router = useRouter();
-  const hydrated = useHydrated();
-  const scan = hydrated ? getScan(scanId) : null;
+  const { data: scan, loading } = useAsyncData(() => getScan(scanId), [scanId]);
 
   useEffect(() => {
     if (scan) track("aura_result_viewed", { scanId: scan.id, ovr: scan.scoring?.overallScore });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, scanId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when data becomes available
+  }, [scan?.id]);
 
-  if (!hydrated) return null;
+  if (loading) return null;
   if (!scan || !scan.scoring || !scan.modelOutput) {
     return (
       <div className="mx-auto max-w-lg px-5 py-16 text-center text-muted">

@@ -1,269 +1,529 @@
-// Stage 3 persistence layer.
-//
-// Backed by localStorage so the click-through flow genuinely persists across
-// leave/return (Bible §81 Day 3 acceptance: "user can leave and return to same
-// baseline") without needing Supabase yet. Every function here maps 1:1 to a
-// future Supabase table (see lib/types/aura.ts and supabase/migrations/) so
-// Stage 5 swaps the implementation, not the call sites.
+// Stage 5 persistence layer — Supabase-backed (real accounts, real database,
+// private photo storage). Replaces the Stage 3 localStorage version; exported
+// function names are mostly unchanged, but every one is now async and scoped
+// to the signed-in (anonymous or not) Supabase user via RLS.
 
 "use client";
 
+import { createClient } from "@/lib/supabase/client";
+import { ensureSession } from "@/lib/supabase/session";
+import { deleteScanPhotos, uploadScanPhoto } from "@/lib/supabase/storage";
+import { XP_REWARDS, XpReason } from "@/lib/gamification/xp";
 import {
+  AuraCategory,
+  AuraModelOutput,
   Comparison,
+  Confidence,
   FeedbackEntry,
   Goal,
   Mission,
+  MissionStatus,
+  PendingImage,
   Profile,
   Scan,
-  XpEvent,
+  ScanImageMeta,
+  ScanType,
+  ScoringResult,
 } from "@/lib/types/aura";
-import { XP_REWARDS, XpReason } from "@/lib/gamification/xp";
 
-const KEYS = {
-  userId: "aura.userId",
-  profile: "aura.profile",
-  scans: "aura.scans",
-  missions: "aura.missions",
-  comparisons: "aura.comparisons",
-  feedback: "aura.feedback",
-  analytics: "aura.analyticsEvents",
-  xpEvents: "aura.xpEvents",
-  awardedBonuses: "aura.awardedBonuses",
-} as const;
+// ---- DB row shapes (snake_case, as returned by Supabase) ----
 
-function isBrowser() {
-  return typeof window !== "undefined";
+interface ScanImageRow {
+  view_type: string;
+  storage_path: string;
+  width: number;
+  height: number;
+  size_bytes: number;
+  quality_flags: string[];
 }
 
-function read<T>(key: string, fallback: T): T {
-  if (!isBrowser()) return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
+interface ScanCategoryRow {
+  category: AuraCategory;
+  score: number;
+  confidence: Confidence;
+  evidence: string[];
+  controllable_factors: string[];
 }
 
-function write<T>(key: string, value: T) {
-  if (!isBrowser()) return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+interface ScanRow {
+  id: string;
+  user_id: string;
+  scan_type: ScanType;
+  status: Scan["status"];
+  goal: Goal;
+  baseline_scan_id: string | null;
+  overall_score: number | null;
+  overall_confidence: Confidence | null;
+  model_output: AuraModelOutput | null;
+  model_version: string;
+  rubric_version: string;
+  scoring_version: string;
+  created_at: string;
+  completed_at: string | null;
+  scan_images?: ScanImageRow[];
+  scan_categories?: ScanCategoryRow[];
 }
 
-export function getUserId(): string {
-  if (!isBrowser()) return "server";
-  let id = window.localStorage.getItem(KEYS.userId);
-  if (!id) {
-    id = crypto.randomUUID();
-    window.localStorage.setItem(KEYS.userId, id);
-  }
-  return id;
+export async function getUserId(): Promise<string> {
+  return ensureSession();
 }
 
 // ---- Profile ----
 
-export function getProfile(): Profile | null {
-  return read<Profile | null>(KEYS.profile, null);
+export async function getProfile(): Promise<Profile | null> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { data, error } = await supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return {
+    userId: data.user_id,
+    ageGateConfirmed: data.age_gate_confirmed,
+    primaryGoal: data.primary_goal,
+    createdAt: data.created_at,
+  };
 }
 
-export function saveProfile(update: Partial<Profile>): Profile {
-  const existing = getProfile();
-  const profile: Profile = {
-    userId: getUserId(),
-    ageGateConfirmed: false,
-    primaryGoal: null,
-    createdAt: new Date().toISOString(),
-    ...existing,
-    ...update,
+export async function saveProfile(update: Partial<Omit<Profile, "userId">>): Promise<Profile> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { data, error } = await supabase
+    .from("profiles")
+    .upsert(
+      {
+        user_id: userId,
+        ...(update.ageGateConfirmed !== undefined ? { age_gate_confirmed: update.ageGateConfirmed } : {}),
+        ...(update.primaryGoal !== undefined ? { primary_goal: update.primaryGoal } : {}),
+      },
+      { onConflict: "user_id" }
+    )
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return {
+    userId: data.user_id,
+    ageGateConfirmed: data.age_gate_confirmed,
+    primaryGoal: data.primary_goal,
+    createdAt: data.created_at,
   };
-  write(KEYS.profile, profile);
-  return profile;
 }
 
 // ---- Scans ----
 
-export function listScans(): Scan[] {
-  return read<Scan[]>(KEYS.scans, []).sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
+const SCAN_SELECT = "*, scan_images(*), scan_categories(*)";
+
+function mapScanRow(row: ScanRow): Scan {
+  const images: ScanImageMeta[] = (row.scan_images ?? [])
+    .slice()
+    .sort((a, b) => a.view_type.localeCompare(b.view_type))
+    .map((img) => ({
+      viewType: img.view_type as ScanImageMeta["viewType"],
+      fileName: `${img.view_type}.jpg`,
+      width: img.width,
+      height: img.height,
+      sizeBytes: img.size_bytes,
+      qualityFlags: img.quality_flags ?? [],
+      storagePath: img.storage_path,
+    }));
+
+  const scoring: ScoringResult | null =
+    row.overall_score != null
+      ? {
+          overallScore: row.overall_score,
+          overallConfidence: row.overall_confidence!,
+          categories: (row.scan_categories ?? []).map((c) => ({
+            category: c.category,
+            score: c.score,
+            confidence: c.confidence,
+            evidence: c.evidence ?? [],
+            controllableFactors: c.controllable_factors ?? [],
+          })),
+          scoringVersion: row.scoring_version,
+          rubricVersion: row.rubric_version,
+        }
+      : null;
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    scanType: row.scan_type,
+    status: row.status,
+    goal: row.goal,
+    baselineScanId: row.baseline_scan_id,
+    images,
+    modelOutput: row.model_output,
+    scoring,
+    modelVersion: row.model_version,
+    rubricVersion: row.rubric_version,
+    scoringVersion: row.scoring_version,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
 }
 
-export function getScan(id: string): Scan | null {
-  return listScans().find((s) => s.id === id) ?? null;
+export async function listScans(): Promise<Scan[]> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("scans").select(SCAN_SELECT).order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(mapScanRow);
 }
 
-export function saveScan(scan: Scan) {
-  const scans = read<Scan[]>(KEYS.scans, []);
-  const idx = scans.findIndex((s) => s.id === scan.id);
-  if (idx >= 0) scans[idx] = scan;
-  else scans.push(scan);
-  write(KEYS.scans, scans);
+export async function getScan(id: string): Promise<Scan | null> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("scans").select(SCAN_SELECT).eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapScanRow(data) : null;
 }
 
-export function deleteScan(id: string) {
-  const scans = read<Scan[]>(KEYS.scans, []).filter((s) => s.id !== id);
-  write(KEYS.scans, scans);
-  const comparisons = read<Comparison[]>(KEYS.comparisons, []).filter(
-    (c) => c.baselineScanId !== id && c.currentScanId !== id
-  );
-  write(KEYS.comparisons, comparisons);
-  const missions = read<Mission[]>(KEYS.missions, []).filter((m) => m.sourceScanId !== id);
-  write(KEYS.missions, missions);
-}
-
-export function latestCompleteScan(): Scan | null {
-  const scans = listScans().filter((s) => s.status === "complete");
+export async function latestCompleteScan(): Promise<Scan | null> {
+  const scans = (await listScans()).filter((s) => s.status === "complete");
   return scans.length ? scans[scans.length - 1] : null;
 }
 
-export function baselineScan(): Scan | null {
-  const scans = listScans().filter((s) => s.status === "complete" && s.scanType === "baseline");
+export async function baselineScan(): Promise<Scan | null> {
+  const scans = (await listScans()).filter((s) => s.status === "complete" && s.scanType === "baseline");
   return scans.length ? scans[0] : null;
+}
+
+export interface CreateScanInput {
+  scanType: ScanType;
+  goal: Goal;
+  baselineScanId: string | null;
+  images: PendingImage[];
+  modelOutput: AuraModelOutput;
+  scoring: ScoringResult;
+  modelVersion: string;
+}
+
+/** Uploads photos to private storage, then persists the scan + its category rows. */
+export async function createScan(input: CreateScanInput): Promise<Scan> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+
+  const { data: scanRow, error: scanError } = await supabase
+    .from("scans")
+    .insert({
+      user_id: userId,
+      scan_type: input.scanType,
+      status: "complete",
+      goal: input.goal,
+      baseline_scan_id: input.baselineScanId,
+      overall_score: input.scoring.overallScore,
+      overall_confidence: input.scoring.overallConfidence,
+      model_output: input.modelOutput,
+      model_version: input.modelVersion,
+      rubric_version: input.scoring.rubricVersion,
+      scoring_version: input.scoring.scoringVersion,
+      completed_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+  if (scanError) throw new Error(scanError.message);
+  const scanId = scanRow.id as string;
+
+  const uploadedPaths = await Promise.all(
+    input.images.map((img) => uploadScanPhoto(userId, scanId, img.viewType, img.dataUrl))
+  );
+
+  const { error: imagesError } = await supabase.from("scan_images").insert(
+    input.images.map((img, i) => ({
+      scan_id: scanId,
+      view_type: img.viewType,
+      storage_path: uploadedPaths[i],
+      width: img.width,
+      height: img.height,
+      size_bytes: img.sizeBytes,
+      quality_flags: img.qualityFlags,
+    }))
+  );
+  if (imagesError) throw new Error(imagesError.message);
+
+  const { error: categoriesError } = await supabase.from("scan_categories").insert(
+    input.scoring.categories.map((c) => ({
+      scan_id: scanId,
+      category: c.category,
+      score: c.score,
+      confidence: c.confidence,
+      evidence: c.evidence,
+      controllable_factors: c.controllableFactors,
+    }))
+  );
+  if (categoriesError) throw new Error(categoriesError.message);
+
+  const created = await getScan(scanId);
+  if (!created) throw new Error("scan_reload_failed");
+  return created;
+}
+
+export async function deleteScan(id: string): Promise<void> {
+  const supabase = createClient();
+  await ensureSession();
+  const scan = await getScan(id);
+  if (scan) {
+    await deleteScanPhotos(scan.images.map((img) => img.storagePath)).catch(() => {});
+  }
+  const { error } = await supabase.from("scans").delete().eq("id", id);
+  if (error) throw new Error(error.message);
 }
 
 // ---- Missions ----
 
-export function listMissions(): Mission[] {
-  return read<Mission[]>(KEYS.missions, []);
+interface MissionRow {
+  id: string;
+  user_id: string;
+  source_scan_id: string;
+  category: AuraCategory;
+  title: string;
+  action: string;
+  reason: string;
+  impact_band: Mission["impactBand"];
+  effort_band: Mission["effortBand"];
+  cost_band: Mission["costBand"];
+  time_horizon: string;
+  success_check: string;
+  mission_type: Mission["missionType"];
+  steps: Mission["steps"];
+  xp_reward: number;
+  status: MissionStatus;
+  queue_position: number;
+  suggested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  note: string | null;
 }
 
-export function activeMissions(): Mission[] {
-  return listMissions()
+function mapMissionRow(row: MissionRow): Mission {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    sourceScanId: row.source_scan_id,
+    category: row.category,
+    title: row.title,
+    action: row.action,
+    reason: row.reason,
+    impactBand: row.impact_band,
+    effortBand: row.effort_band,
+    costBand: row.cost_band,
+    timeHorizon: row.time_horizon,
+    successCheck: row.success_check,
+    missionType: row.mission_type,
+    steps: row.steps ?? [],
+    xpReward: row.xp_reward,
+    status: row.status,
+    queuePosition: row.queue_position,
+    suggestedAt: row.suggested_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    note: row.note,
+  };
+}
+
+export async function listMissions(): Promise<Mission[]> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("missions").select("*");
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(mapMissionRow);
+}
+
+export async function activeMissions(): Promise<Mission[]> {
+  return (await listMissions())
     .filter((m) => m.status === "active")
     .sort((a, b) => new Date(a.startedAt ?? 0).getTime() - new Date(b.startedAt ?? 0).getTime());
 }
 
-export function suggestedMissions(): Mission[] {
-  return listMissions()
-    .filter((m) => m.status === "suggested")
-    .sort((a, b) => a.queuePosition - b.queuePosition);
+export async function suggestedMissions(): Promise<Mission[]> {
+  return (await listMissions()).filter((m) => m.status === "suggested").sort((a, b) => a.queuePosition - b.queuePosition);
 }
 
-export function saveMission(mission: Mission) {
-  const missions = read<Mission[]>(KEYS.missions, []);
-  const idx = missions.findIndex((m) => m.id === mission.id);
-  if (idx >= 0) missions[idx] = mission;
-  else missions.push(mission);
-  write(KEYS.missions, missions);
+export async function getMission(id: string): Promise<Mission | null> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("missions").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapMissionRow(data) : null;
+}
+
+export async function saveMission(mission: Mission): Promise<void> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { error } = await supabase.from("missions").update({
+    status: mission.status,
+    steps: mission.steps,
+    started_at: mission.startedAt,
+    completed_at: mission.completedAt,
+    note: mission.note,
+  }).eq("id", mission.id).eq("user_id", userId);
+  if (error) throw new Error(error.message);
 }
 
 /**
  * Queues every recommendation from a freshly-scored scan as a "suggested"
- * mission (Current / Up Next / Later on the Journey page), skipping any
- * category the user is already actively working on or has completed.
+ * mission, skipping any category the user already has a pending, active, or
+ * completed mission for.
  */
-export function queueMissionsFromScan(scan: Scan): Mission[] {
-  if (!scan.modelOutput) return [];
-  // Exclude any category that already has a pending or resolved mission —
-  // "suggested" too, not just active/completed — otherwise a category still
-  // sitting unstarted in the queue gets re-suggested (duplicated) on every
-  // later scan that also flags it as an opportunity.
-  const existingCategories = new Set(
-    listMissions()
-      .filter((m) => m.status !== "dismissed")
-      .map((m) => m.category)
-  );
+export async function queueMissionsFromScan(scan: Scan): Promise<void> {
+  if (!scan.modelOutput) return;
+  const supabase = createClient();
+  const userId = await ensureSession();
 
-  const created: Mission[] = scan.modelOutput.recommended_upgrades
+  const existing = await listMissions();
+  const existingCategories = new Set(existing.filter((m) => m.status !== "dismissed").map((m) => m.category));
+
+  const toInsert = scan.modelOutput.recommended_upgrades
     .filter((u) => !existingCategories.has(u.category))
     .map((u, i) => ({
-      id: crypto.randomUUID(),
-      userId: scan.userId,
-      sourceScanId: scan.id,
+      user_id: userId,
+      source_scan_id: scan.id,
       category: u.category,
       title: u.title,
       action: u.action,
       reason: u.reason,
-      impactBand: u.impact_band,
-      effortBand: u.effort_band,
-      costBand: u.cost_band,
-      timeHorizon: u.time_horizon,
-      successCheck: u.success_check,
-      missionType: u.mission_type,
+      impact_band: u.impact_band,
+      effort_band: u.effort_band,
+      cost_band: u.cost_band,
+      time_horizon: u.time_horizon,
+      success_check: u.success_check,
+      mission_type: u.mission_type,
       steps: u.steps.map((label) => ({ id: crypto.randomUUID(), label, completed: false, completedAt: null })),
-      xpReward: XP_REWARDS.mission_completed,
-      status: "suggested" as const,
-      queuePosition: i,
-      suggestedAt: new Date().toISOString(),
-      startedAt: null,
-      completedAt: null,
-      note: null,
+      xp_reward: XP_REWARDS.mission_completed,
+      status: "suggested" as MissionStatus,
+      queue_position: i,
     }));
 
-  const missions = read<Mission[]>(KEYS.missions, []);
-  write(KEYS.missions, [...missions, ...created]);
-  return created;
-}
-
-export function getMission(id: string): Mission | null {
-  return listMissions().find((m) => m.id === id) ?? null;
+  if (toInsert.length === 0) return;
+  const { error } = await supabase.from("missions").insert(toInsert);
+  if (error) throw new Error(error.message);
 }
 
 // ---- Comparisons ----
 
-export function listComparisons(): Comparison[] {
-  return read<Comparison[]>(KEYS.comparisons, []);
+interface ComparisonRow {
+  id: string;
+  baseline_scan_id: string;
+  current_scan_id: string;
+  comparability_score: number;
+  overall_delta: number;
+  category_deltas: Comparison["categoryDeltas"];
+  what_changed: string[];
+  possible_noise: string[];
+  created_at: string;
 }
 
-export function getComparison(id: string): Comparison | null {
-  return listComparisons().find((c) => c.id === id) ?? null;
+function mapComparisonRow(row: ComparisonRow): Comparison {
+  return {
+    id: row.id,
+    baselineScanId: row.baseline_scan_id,
+    currentScanId: row.current_scan_id,
+    comparabilityScore: row.comparability_score,
+    overallDelta: row.overall_delta,
+    categoryDeltas: row.category_deltas ?? [],
+    whatChanged: row.what_changed ?? [],
+    possibleNoise: row.possible_noise ?? [],
+    createdAt: row.created_at,
+  };
 }
 
-export function saveComparison(comparison: Comparison) {
-  const comparisons = read<Comparison[]>(KEYS.comparisons, []);
-  comparisons.push(comparison);
-  write(KEYS.comparisons, comparisons);
+export async function getComparison(id: string): Promise<Comparison | null> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("scan_comparisons").select("*").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapComparisonRow(data) : null;
+}
+
+export async function saveComparison(comparison: Comparison): Promise<Comparison> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { data, error } = await supabase
+    .from("scan_comparisons")
+    .insert({
+      user_id: userId,
+      baseline_scan_id: comparison.baselineScanId,
+      current_scan_id: comparison.currentScanId,
+      comparability_score: comparison.comparabilityScore,
+      overall_delta: comparison.overallDelta,
+      category_deltas: comparison.categoryDeltas,
+      what_changed: comparison.whatChanged,
+      possible_noise: comparison.possibleNoise,
+    })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return mapComparisonRow(data);
 }
 
 // ---- Feedback ----
 
-export function saveFeedback(entry: FeedbackEntry) {
-  const all = read<FeedbackEntry[]>(KEYS.feedback, []);
-  all.push(entry);
-  write(KEYS.feedback, all);
+export async function saveFeedback(entry: Omit<FeedbackEntry, "id" | "userId" | "createdAt">): Promise<void> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { error } = await supabase.from("feedback").insert({
+    user_id: userId,
+    scan_id: entry.scanId,
+    helpful: entry.helpful,
+    score_felt_stable: entry.scoreFeltStable,
+    recommendation_used: entry.recommendationUsed,
+    notes: entry.notes,
+  });
+  if (error) throw new Error(error.message);
 }
 
-// ---- XP / gamification ----
+// ---- XP ----
 
-export function listXpEvents(): XpEvent[] {
-  return read<XpEvent[]>(KEYS.xpEvents, []);
+export async function getXpTotal(): Promise<number> {
+  const supabase = createClient();
+  await ensureSession();
+  const { data, error } = await supabase.from("xp_events").select("amount");
+  if (error) throw new Error(error.message);
+  return (data ?? []).reduce((sum, e) => sum + e.amount, 0);
 }
 
-export function getXpTotal(): number {
-  return listXpEvents().reduce((sum, e) => sum + e.amount, 0);
-}
-
-/**
- * Awards XP for a meaningful action. `dedupeKey`, when provided, guards a
- * one-time bonus (e.g. "first confirmed improvement") from being awarded twice —
- * pass a stable key like `bonus:first_confirmed_improvement`.
- */
-export function awardXp(reason: XpReason, dedupeKey?: string): number {
-  if (dedupeKey) {
-    const awarded = read<string[]>(KEYS.awardedBonuses, []);
-    if (awarded.includes(dedupeKey)) return getXpTotal();
-    write(KEYS.awardedBonuses, [...awarded, dedupeKey]);
-  }
-  const events = read<XpEvent[]>(KEYS.xpEvents, []);
-  events.push({
-    id: crypto.randomUUID(),
-    userId: getUserId(),
+export async function awardXp(reason: XpReason, dedupeKey?: string): Promise<void> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  const { error } = await supabase.from("xp_events").insert({
+    user_id: userId,
     amount: XP_REWARDS[reason],
     reason,
-    createdAt: new Date().toISOString(),
+    dedupe_key: dedupeKey ?? null,
   });
-  write(KEYS.xpEvents, events);
-  return events.reduce((sum, e) => sum + e.amount, 0);
+  // A dedupe_key collision (unique constraint) means this one-time bonus was
+  // already awarded — that's success, not a failure, so swallow it.
+  if (error && !error.message.includes("duplicate key")) throw new Error(error.message);
 }
 
 // ---- Danger zone ----
 
-export function deleteAllData() {
-  if (!isBrowser()) return;
-  Object.values(KEYS).forEach((k) => window.localStorage.removeItem(k));
+export async function deleteAllData(): Promise<void> {
+  const supabase = createClient();
+  const userId = await ensureSession();
+  // Deleting the user cascades every table via `on delete cascade`. Storage
+  // objects aren't covered by that cascade, so remove them first.
+  const scans = await listScans();
+  const allPaths = scans.flatMap((s) => s.images.map((i) => i.storagePath));
+  await deleteScanPhotos(allPaths).catch(() => {});
+  const { error } = await supabase.rpc("delete_own_account");
+  if (error) {
+    // Fallback if the RPC isn't set up: delete rows table-by-table instead
+    // of the auth user itself (anonymous user row is harmless to leave behind).
+    await Promise.all([
+      supabase.from("scans").delete().eq("user_id", userId),
+      supabase.from("missions").delete().eq("user_id", userId),
+      supabase.from("scan_comparisons").delete().eq("user_id", userId),
+      supabase.from("feedback").delete().eq("user_id", userId),
+      supabase.from("xp_events").delete().eq("user_id", userId),
+      supabase.from("profiles").delete().eq("user_id", userId),
+    ]);
+  }
+  await supabase.auth.signOut();
 }
 
-// ---- Draft (in-progress scan wizard state, kept separate from committed scans) ----
+// ---- Draft (in-progress scan wizard state) ----
+// Pure ephemeral UI state for the multi-step capture wizard — never needs to
+// survive across devices, so this alone stays in localStorage.
 
 export interface ScanDraft {
   scanType: "baseline" | "rescan";
@@ -274,16 +534,21 @@ export interface ScanDraft {
 const DRAFT_KEY = "aura.draft";
 
 export function getDraft(): ScanDraft {
-  return read<ScanDraft>(DRAFT_KEY, { scanType: "baseline", baselineScanId: null, goal: null });
+  if (typeof window === "undefined") return { scanType: "baseline", baselineScanId: null, goal: null };
+  try {
+    const raw = window.localStorage.getItem(DRAFT_KEY);
+    return raw ? JSON.parse(raw) : { scanType: "baseline", baselineScanId: null, goal: null };
+  } catch {
+    return { scanType: "baseline", baselineScanId: null, goal: null };
+  }
 }
 
 export function saveDraft(update: Partial<ScanDraft>) {
   const draft = { ...getDraft(), ...update };
-  write(DRAFT_KEY, draft);
+  if (typeof window !== "undefined") window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
   return draft;
 }
 
 export function clearDraft() {
-  if (!isBrowser()) return;
-  window.localStorage.removeItem(DRAFT_KEY);
+  if (typeof window !== "undefined") window.localStorage.removeItem(DRAFT_KEY);
 }
