@@ -3,26 +3,26 @@
 // prototype data model (§79). Stage 3 uses these types with a mock analysis engine;
 // Stage 4 swaps the model call underneath without changing this contract.
 
-export const AURA_CATEGORIES = [
-  "hair",
-  "facial_hair",
-  "skin_grooming",
-  "style",
-  "accessories",
-  "physique_presentation",
-  "photo_presence",
-] as const;
+// v0.3 category redesign: the previous 7 categories included Photo Presence,
+// which mixed in *capture* quality (lighting/framing/angle) with the person's
+// actual presentation — that meant a better-lit rescan could move the score
+// even with zero real-world change, and it was one of the least stable
+// categories under repeated testing. Photo Presence is now Scan Quality
+// (below), tracked separately and never part of OVR. Facial Hair/Grooming and
+// Skin/Grooming also read as near-duplicate "grooming" scores on the
+// dashboard; they're merged into Face. These six are meant to read like
+// distinct player-build stats, not a report full of overlapping subscores.
+export const AURA_CATEGORIES = ["face", "hair", "style", "physique", "presence", "details"] as const;
 
 export type AuraCategory = (typeof AURA_CATEGORIES)[number];
 
 export const CATEGORY_LABELS: Record<AuraCategory, string> = {
+  face: "Face",
   hair: "Hair",
-  facial_hair: "Facial Hair / Grooming",
-  skin_grooming: "Skin / Grooming Presentation",
   style: "Style",
-  accessories: "Accessories",
-  physique_presentation: "Physique Presentation",
-  photo_presence: "Photo Presence",
+  physique: "Physique",
+  presence: "Presence",
+  details: "Details",
 };
 
 export type Confidence = "low" | "medium" | "high";
@@ -51,10 +51,17 @@ export const GOAL_LABELS: Record<Goal, string> = {
 
 // ---- Raw "model" output contract (Stage 4 will populate this from OpenAI) ----
 
+// Technical capture quality — lighting, framing, angle, visibility. This is
+// about the PHOTO, not the person, and never contributes to OVR: a better-lit
+// rescan should never look like real-world progress.
+export const SCAN_QUALITY_RATINGS = ["excellent", "good", "fair", "retake"] as const;
+export type ScanQualityRating = (typeof SCAN_QUALITY_RATINGS)[number];
+
 export interface ScanQuality {
   usable: boolean;
   issues: string[];
   comparability_score: number; // 0-1
+  rating: ScanQualityRating;
 }
 
 // A free continuous 0-100 "provisional_score" measurably destabilizes model
@@ -68,10 +75,49 @@ export interface ScanQuality {
 export const SCORE_TIERS = ["needs_work", "developing", "solid", "strong", "excellent"] as const;
 export type ScoreTier = (typeof SCORE_TIERS)[number];
 
-export interface CategoryModelOutput {
-  name: AuraCategory;
+// Rather than one holistic tier per category, the model reports 2-4 named
+// submetrics (e.g. Presence -> posture, stance, expression_composure), each
+// independently tiered. lib/scoring averages them into the category score.
+// This is a second, cheaper layer of the same fix as the tier system itself:
+// forcing several smaller, more concrete judgment calls is more stable than
+// trusting one broad one, without the cost/latency of multiple API calls.
+export interface CategorySubmetric {
+  name: string;
   tier: ScoreTier;
-  tier_adjustment: number; // -5 to 5, fine positioning within the tier only — never a substitute for picking the right tier
+  confidence: Confidence;
+}
+
+export interface CategoryModelOutput {
+  name: Exclude<AuraCategory, "details">; // Details has its own shape below
+  submetrics: CategorySubmetric[];
+  tier_adjustment: number; // -5 to 5, fine positioning on top of the submetric average — never a substitute for picking the right submetric tiers
+  confidence: Confidence;
+  evidence: string[];
+  controllable_factors: string[];
+  unknowns: string[];
+}
+
+// Details (accessories/finishing touches) started as one holistic
+// "cohesion_tier" judgment rather than submetrics like the other five
+// categories — a live stability test confirmed that was the wrong call: it
+// was the single worst category (29 pt range across 5 identical runs, vs
+// 1-9 pts everywhere else). It now uses the same submetric-averaging
+// mechanism as everything else. The boolean visible_details/
+// detail_opportunity_present observations are kept alongside — they don't
+// drive the score (absence of accessories is never automatically a
+// weakness), but they're what the recommendation engine uses to decide
+// whether a Details mission actually makes sense.
+export interface DetailsModelOutput {
+  visible_details: {
+    glasses: boolean;
+    jewelry: boolean;
+    watch: boolean;
+    belt_visible: boolean;
+    footwear_visible: boolean;
+  };
+  detail_opportunity_present: boolean;
+  submetrics: CategorySubmetric[];
+  tier_adjustment: number;
   confidence: Confidence;
   evidence: string[];
   controllable_factors: string[];
@@ -102,7 +148,8 @@ export interface RecommendedUpgrade {
 
 export interface AuraModelOutput {
   scan_quality: ScanQuality;
-  categories: CategoryModelOutput[];
+  categories: CategoryModelOutput[]; // exactly 5: face, hair, style, physique, presence
+  details: DetailsModelOutput; // the 6th stat, shaped differently — see DetailsModelOutput
   strengths: string[];
   opportunities: string[];
   recommended_upgrades: RecommendedUpgrade[];

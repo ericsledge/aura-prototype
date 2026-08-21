@@ -39,7 +39,10 @@ export async function analyzeWithOpenAI(images: AnalyzeImageInput[], goal: Goal)
     // is the lever we can pull instead: more deliberation before answering,
     // tested via tools/stability-test.ts to actually reduce run-to-run
     // judgment variance on the more subjective categories (not just assumed).
-    reasoning_effort: "high",
+    // "max" is not a valid value for this model — confirmed via a live 400
+    // listing the real supported set (none/low/medium/high/xhigh); "xhigh"
+    // is the actual ceiling.
+    reasoning_effort: "xhigh",
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

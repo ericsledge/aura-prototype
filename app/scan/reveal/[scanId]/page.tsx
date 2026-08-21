@@ -4,11 +4,13 @@ import { use, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { OvrDial } from "@/components/aura/OvrDial";
 import { CategoryBar } from "@/components/aura/CategoryBar";
+import { ScanQualityBadge } from "@/components/aura/ScanQualityBadge";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { getScan } from "@/lib/store/auraStore";
 import { track } from "@/lib/analytics/events";
 import { useAsyncData } from "@/lib/hooks/useAsyncData";
+import { CATEGORY_LABELS } from "@/lib/types/aura";
 
 export default function RevealPage(props: PageProps<"/scan/reveal/[scanId]">) {
   const { scanId } = use(props.params);
@@ -37,14 +39,9 @@ export default function RevealPage(props: PageProps<"/scan/reveal/[scanId]">) {
 
   return (
     <div className="mx-auto flex max-w-lg flex-col items-center gap-8 px-5 py-10">
-      <OvrDial score={scan.scoring.overallScore} confidence={scan.scoring.overallConfidence} />
+      <ScanQualityBadge scanQuality={scan.modelOutput.scan_quality} />
 
-      {scan.modelOutput.scan_quality.comparability_score < 0.7 && (
-        <Card className="w-full border-warning/40 bg-warning/5 text-sm text-warning">
-          Some photos had quality issues, so confidence is lower than usual. Retaking cleaner photos will improve
-          reliability next time.
-        </Card>
-      )}
+      <OvrDial score={scan.scoring.overallScore} confidence={scan.scoring.overallConfidence} animateReveal />
 
       <div className="w-full">
         <h2 className="mb-3 text-sm font-medium text-muted">Category breakdown</h2>
@@ -60,11 +57,11 @@ export default function RevealPage(props: PageProps<"/scan/reveal/[scanId]">) {
       <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
         <Card>
           <p className="text-xs uppercase tracking-wide text-success">Strongest area</p>
-          <p className="mt-1 font-medium">{scan.modelOutput.strengths[0] ?? `${strongest.category} is strong`}</p>
+          <p className="mt-1 font-medium">{scan.modelOutput.strengths[0] ?? `${CATEGORY_LABELS[strongest.category]} is a current strength.`}</p>
         </Card>
         <Card>
           <p className="text-xs uppercase tracking-wide text-accent-soft">Biggest opportunity</p>
-          <p className="mt-1 font-medium">{scan.modelOutput.opportunities[0] ?? `${weakest.category} has room to grow`}</p>
+          <p className="mt-1 font-medium">{scan.modelOutput.opportunities[0] ?? `${CATEGORY_LABELS[weakest.category]} has the most room to grow.`}</p>
         </Card>
       </div>
 

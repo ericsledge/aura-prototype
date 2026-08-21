@@ -73,7 +73,7 @@ async function main() {
     const response = await openai.chat.completions.create({
       model: MODEL,
       // gpt-5.6-* rejects any temperature other than the default (1).
-      reasoning_effort: "high",
+      reasoning_effort: "xhigh",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: [{ type: "text", text: buildUserPrompt(goal) }, ...images] },

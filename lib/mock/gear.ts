@@ -18,16 +18,14 @@ export const GEAR_BY_CATEGORY: Partial<Record<AuraCategory, MockGearItem[]>> = {
     { id: "neutral-tee", name: "Fitted neutral tee", priceBand: "$", note: "Versatile base layer" },
     { id: "tapered-trouser", name: "Tapered trouser", priceBand: "$$", note: "Cleaner silhouette" },
   ],
-  accessories: [
+  details: [
     { id: "silver-chain", name: "Simple silver chain", priceBand: "$", note: "Low effort, coordinated" },
     { id: "minimal-watch", name: "Minimal watch", priceBand: "$$", note: "Medium impact" },
     { id: "neutral-bracelet", name: "Neutral bracelet", priceBand: "$", note: "Low effort" },
   ],
-  facial_hair: [
+  face: [
     { id: "precision-trimmer", name: "Precision trimmer", priceBand: "$$", note: "Clean, symmetric edges" },
     { id: "beard-oil", name: "Beard care oil", priceBand: "$", note: "Maintenance" },
-  ],
-  skin_grooming: [
     { id: "cleanser", name: "Daily cleanser", priceBand: "$", note: "Grooming routine basics" },
     { id: "moisturizer", name: "Lightweight moisturizer", priceBand: "$", note: "Grooming routine basics" },
   ],

@@ -16,6 +16,7 @@ export type AuraEventName =
   | "upload_completed"
   | "scan_analysis_started"
   | "scan_analysis_completed"
+  | "scan_quality_retake_needed"
   | "first_scan_completed"
   | "aura_result_viewed"
   | "upgrade_plan_viewed"

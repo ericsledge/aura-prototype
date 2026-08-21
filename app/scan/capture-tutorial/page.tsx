@@ -5,11 +5,12 @@ import { WizardShell } from "@/components/aura/WizardShell";
 import { Button } from "@/components/ui/Button";
 import { getDraft } from "@/lib/store/auraStore";
 import { useHydrated } from "@/lib/hooks/useHydrated";
+import { CaptureSilhouette } from "@/components/aura/CaptureSilhouette";
 
 const SLOTS = [
-  { title: "Front", body: "Face forward, neutral expression, even lighting, no filters." },
-  { title: "3/4 or side", body: "Same environment, upper body visible." },
-  { title: "Full-body / presentation", body: "Full outfit visible, standing naturally, no extreme pose." },
+  { title: "Front", body: "Face forward, neutral expression, even lighting, no filters.", kind: "front" as const },
+  { title: "3/4 or side", body: "Same environment, upper body visible.", kind: "three_quarter" as const },
+  { title: "Full-body / presentation", body: "Full outfit visible, standing naturally, no extreme pose.", kind: "full_body" as const },
 ];
 
 export default function CaptureTutorialPage() {
@@ -29,10 +30,10 @@ export default function CaptureTutorialPage() {
       backHref="/scan/goal"
     >
       <div className="flex flex-col gap-4">
-        {SLOTS.map((slot, i) => (
-          <div key={slot.title} className="flex items-start gap-4 rounded-2xl border border-border-subtle bg-surface p-4">
-            <div className="flex h-16 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-border-subtle text-xs text-muted">
-              {i + 1}
+        {SLOTS.map((slot) => (
+          <div key={slot.title} className="flex items-center gap-4 rounded-2xl border border-border-subtle bg-surface p-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-dashed border-border-subtle">
+              <CaptureSilhouette kind={slot.kind} />
             </div>
             <div>
               <h3 className="font-medium">{slot.title}</h3>

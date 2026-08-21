@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Badge, Card } from "@/components/ui/Card";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { OvrDial } from "@/components/aura/OvrDial";
@@ -87,59 +88,69 @@ export default function JourneyPage() {
     refetch();
   }
 
+  const currentMissionDone = currentMission ? currentMission.steps.filter((s) => s.completed).length : 0;
+  const currentMissionTotal = currentMission ? currentMission.steps.length : 0;
+
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-8 px-5 py-10">
+      {/* Hero: OVR + Level — compact by design, this is glanced at every visit */}
       <div className="flex flex-col items-center gap-2">
-        <OvrDial
-          score={latest.scoring!.overallScore}
-          confidence={latest.scoring!.overallConfidence}
-          size={180}
-          delta={deltaSinceLast ?? undefined}
-        />
-        <p className="text-xs text-muted">
-          {daysSinceLatest === 0 ? "Scanned today" : `Last scan ${daysSinceLatest} day${daysSinceLatest === 1 ? "" : "s"} ago`}
-        </p>
-        <div className="mt-2 flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-3">
+          <OvrDial
+            score={latest.scoring!.overallScore}
+            confidence={latest.scoring!.overallConfidence}
+            size={140}
+            delta={deltaSinceLast ?? undefined}
+          />
+        </div>
+        <div className="flex items-center gap-2 text-xs">
           <Badge tone="accent">Level {level.level}</Badge>
           {level.xpForNextLevel !== null && (
             <span className="text-muted">
               {level.xpIntoLevel} / {level.xpForNextLevel} XP
             </span>
           )}
+          <span className="text-muted">
+            · {daysSinceLatest === 0 ? "Scanned today" : `Last scan ${daysSinceLatest}d ago`}
+          </span>
         </div>
         <div className="h-1.5 w-40 overflow-hidden rounded-full bg-surface-elevated">
           <div className="h-full rounded-full bg-gradient-to-r from-accent to-accent-soft" style={{ width: `${level.progressRatio * 100}%` }} />
         </div>
       </div>
 
-      <Card>
-        <div className="flex items-center justify-between text-sm">
-          <span className="font-medium">Road to {milestone.target}</span>
-          <span className="text-muted">
-            {latest.scoring!.overallScore} → {milestone.target}
-          </span>
-        </div>
-        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-surface-elevated">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-accent to-accent-soft transition-all"
-            style={{ width: `${milestone.progressRatio * 100}%` }}
-          />
-        </div>
-        <p className="mt-2 text-xs text-muted">Your current improvement roadmap — not a guaranteed score.</p>
-      </Card>
-
+      {/* The biggest card on the page — this is the one thing a returning user
+          should act on. Road to X, Build Stats, and history all follow it. */}
       {currentMission ? (
-        <div>
-          <h2 className="mb-3 text-sm font-medium text-muted">Current Mission</h2>
-          <MissionSummaryCard mission={currentMission} onComplete={() => completeMission(currentMission)} />
-          {otherActive.length > 0 && (
-            <div className="mt-2 flex flex-col gap-2">
-              {otherActive.map((m: Mission) => (
-                <MissionSummaryCard key={m.id} mission={m} onComplete={() => completeMission(m)} />
-              ))}
+        <Link
+          href={`/missions/${currentMission.id}`}
+          className="flex flex-col gap-4 rounded-3xl border-2 border-accent/40 bg-gradient-to-b from-accent/10 to-surface p-6 transition-colors hover:border-accent/70"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs uppercase tracking-[0.2em] text-accent-soft">Current Mission</span>
+            <span className="text-xs uppercase tracking-wide text-muted">{CATEGORY_LABELS[currentMission.category]}</span>
+          </div>
+          <h2 className="text-2xl font-bold tracking-tight">{currentMission.title}</h2>
+          {currentMissionTotal > 0 && (
+            <div>
+              <div className="mb-1 flex items-center justify-between text-xs text-muted">
+                <span>
+                  {currentMissionDone}/{currentMissionTotal} steps
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-elevated">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-accent to-accent-soft transition-all"
+                  style={{ width: `${(currentMissionDone / currentMissionTotal) * 100}%` }}
+                />
+              </div>
             </div>
           )}
-        </div>
+          <span className="self-start rounded-full bg-accent px-5 py-2 text-sm font-medium text-white">Continue Mission</span>
+          {otherActive.length > 0 && (
+            <p className="text-xs text-muted">+{otherActive.length} other active mission{otherActive.length > 1 ? "s" : ""}</p>
+          )}
+        </Link>
       ) : queued.length > 0 ? (
         <div>
           <h2 className="mb-3 text-sm font-medium text-muted">Choose Your Next Mission</h2>
@@ -161,6 +172,14 @@ export default function JourneyPage() {
         <Card className="text-sm text-muted">No missions queued right now.</Card>
       )}
 
+      {otherActive.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {otherActive.map((m: Mission) => (
+            <MissionSummaryCard key={m.id} mission={m} onComplete={() => completeMission(m)} />
+          ))}
+        </div>
+      )}
+
       {queued.length > 0 && currentMission && (
         <div>
           <h2 className="mb-3 text-sm font-medium text-muted">Mission Queue</h2>
@@ -180,12 +199,42 @@ export default function JourneyPage() {
         </div>
       )}
 
+      <Card>
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-medium">Road to {milestone.target}</span>
+          <span className="text-muted">
+            {latest.scoring!.overallScore} → {milestone.target}
+          </span>
+        </div>
+        <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-surface-elevated">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-accent to-accent-soft transition-all"
+            style={{ width: `${milestone.progressRatio * 100}%` }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-muted">Your current improvement roadmap — not a guaranteed score.</p>
+      </Card>
+
       <Card className="flex flex-col items-center gap-3 text-center">
         <p className="text-sm text-muted">Ready to see what changed?</p>
         <Button size="lg" onClick={startRescan}>
           Rescan
         </Button>
       </Card>
+
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-muted">Build Stats</h2>
+          <span className="text-xs text-muted">
+            Next to train: {CATEGORY_LABELS[lowestCategory.category]}
+          </span>
+        </div>
+        <Card className="flex flex-col gap-3">
+          {latest.scoring!.categories.map((c) => (
+            <CategoryBar key={c.category} category={c.category} score={c.score} confidence={c.confidence} />
+          ))}
+        </Card>
+      </div>
 
       <div>
         <h2 className="mb-3 text-sm font-medium text-muted">Progression</h2>
@@ -209,53 +258,46 @@ export default function JourneyPage() {
         </Card>
       </div>
 
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-muted">Build Stats</h2>
-          <span className="text-xs text-muted">
-            Next to train: {CATEGORY_LABELS[lowestCategory.category]}
-          </span>
-        </div>
-        <Card className="flex flex-col gap-3">
-          {latest.scoring!.categories.map((c) => (
-            <CategoryBar key={c.category} category={c.category} score={c.score} confidence={c.confidence} />
-          ))}
-        </Card>
-      </div>
-
-      <div>
-        <h2 className="mb-3 text-sm font-medium text-muted">Achievements</h2>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {achievements.map((a) => (
-            <div
-              key={a.id}
-              className={`rounded-2xl border p-3 text-center ${
-                a.unlocked ? "border-accent/40 bg-accent/5" : "border-border-subtle bg-surface opacity-50"
-              }`}
-            >
-              <span className="text-lg">{a.unlocked ? "🏅" : "🔒"}</span>
-              <p className="mt-1 text-xs font-medium">{a.label}</p>
+      <details className="group">
+        <summary className="cursor-pointer text-sm font-medium text-muted marker:content-none">
+          Achievements &amp; scan history <span className="text-xs">(tap to expand)</span>
+        </summary>
+        <div className="mt-4 flex flex-col gap-6">
+          <div>
+            <h2 className="mb-3 text-sm font-medium text-muted">Achievements</h2>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {achievements.map((a) => (
+                <div
+                  key={a.id}
+                  className={`rounded-2xl border p-3 text-center ${
+                    a.unlocked ? "border-accent/40 bg-accent/5" : "border-border-subtle bg-surface opacity-50"
+                  }`}
+                >
+                  <span className="text-lg">{a.unlocked ? "🏅" : "🔒"}</span>
+                  <p className="mt-1 text-xs font-medium">{a.label}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
 
-      <div>
-        <h2 className="mb-3 text-sm font-medium text-muted">Scan history</h2>
-        <div className="flex flex-col gap-2">
-          {[...scans].reverse().map((s: Scan) => (
-            <div key={s.id} className="flex items-center justify-between rounded-2xl border border-border-subtle bg-surface p-4">
-              <div>
-                <p className="text-sm font-medium">
-                  {s.scanType === "baseline" ? "Baseline scan" : "Rescan"} · {s.scoring?.overallScore ?? "—"} OVR
-                </p>
-                <p className="text-xs text-muted">{new Date(s.createdAt).toLocaleDateString()}</p>
-              </div>
-              <Badge>{s.status}</Badge>
+          <div>
+            <h2 className="mb-3 text-sm font-medium text-muted">Scan history</h2>
+            <div className="flex flex-col gap-2">
+              {[...scans].reverse().map((s: Scan) => (
+                <div key={s.id} className="flex items-center justify-between rounded-2xl border border-border-subtle bg-surface p-4">
+                  <div>
+                    <p className="text-sm font-medium">
+                      {s.scanType === "baseline" ? "Baseline scan" : "Rescan"} · {s.scoring?.overallScore ?? "—"} OVR
+                    </p>
+                    <p className="text-xs text-muted">{new Date(s.createdAt).toLocaleDateString()}</p>
+                  </div>
+                  <Badge>{s.status}</Badge>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
-      </div>
+      </details>
 
       <div className="flex justify-center gap-6 text-xs text-muted">
         <LinkButton href="/paywall" variant="ghost" size="md">

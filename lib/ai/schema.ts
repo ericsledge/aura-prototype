@@ -2,9 +2,9 @@
 // exactly the AuraModelOutput shape (lib/types/aura.ts) instead of free-form
 // prose. This is the "Stage 1: input-quality and observable feature
 // extraction" contract from the Bible (§78) — the model only ever supplies
-// evidence and a discrete quality tier per category; lib/scoring computes the
-// real numbers (see the ScoreTier comment in lib/types/aura.ts for why this
-// isn't a free continuous score).
+// evidence and discrete, structured observations; lib/scoring computes the
+// real numbers (see lib/types/aura.ts for why this isn't a free continuous
+// score, and why categories are broken into submetrics).
 
 import { AURA_CATEGORIES, SCORE_TIERS } from "@/lib/types/aura";
 
@@ -12,19 +12,71 @@ const CONFIDENCE_ENUM = ["low", "medium", "high"];
 const BAND_ENUM = ["low", "medium", "high"];
 const COST_ENUM = ["free", "low", "medium", "high"];
 const MISSION_TYPE_ENUM = ["quick_win", "standard", "long_term"];
+const SCAN_QUALITY_RATING_ENUM = ["excellent", "good", "fair", "retake"];
+
+// Details has its own shape (visible_details booleans + cohesion_tier), so
+// the uniform "categories" array only ever contains the other five.
+const NON_DETAILS_CATEGORIES = AURA_CATEGORIES.filter((c) => c !== "details");
+
+const submetricSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    tier: { type: "string", enum: [...SCORE_TIERS] },
+    confidence: { type: "string", enum: CONFIDENCE_ENUM },
+  },
+  required: ["name", "tier", "confidence"],
+  additionalProperties: false,
+};
 
 const categorySchema = {
   type: "object",
   properties: {
-    name: { type: "string", enum: [...AURA_CATEGORIES] },
-    tier: { type: "string", enum: [...SCORE_TIERS] },
+    name: { type: "string", enum: [...NON_DETAILS_CATEGORIES] },
+    submetrics: { type: "array", items: submetricSchema, minItems: 2, maxItems: 4 },
     tier_adjustment: { type: "integer", minimum: -5, maximum: 5 },
     confidence: { type: "string", enum: CONFIDENCE_ENUM },
     evidence: { type: "array", items: { type: "string" }, maxItems: 4 },
     controllable_factors: { type: "array", items: { type: "string" }, maxItems: 3 },
     unknowns: { type: "array", items: { type: "string" }, maxItems: 3 },
   },
-  required: ["name", "tier", "tier_adjustment", "confidence", "evidence", "controllable_factors", "unknowns"],
+  required: ["name", "submetrics", "tier_adjustment", "confidence", "evidence", "controllable_factors", "unknowns"],
+  additionalProperties: false,
+};
+
+const detailsSchema = {
+  type: "object",
+  properties: {
+    visible_details: {
+      type: "object",
+      properties: {
+        glasses: { type: "boolean" },
+        jewelry: { type: "boolean" },
+        watch: { type: "boolean" },
+        belt_visible: { type: "boolean" },
+        footwear_visible: { type: "boolean" },
+      },
+      required: ["glasses", "jewelry", "watch", "belt_visible", "footwear_visible"],
+      additionalProperties: false,
+    },
+    detail_opportunity_present: { type: "boolean" },
+    submetrics: { type: "array", items: submetricSchema, minItems: 2, maxItems: 4 },
+    tier_adjustment: { type: "integer", minimum: -5, maximum: 5 },
+    confidence: { type: "string", enum: CONFIDENCE_ENUM },
+    evidence: { type: "array", items: { type: "string" }, maxItems: 4 },
+    controllable_factors: { type: "array", items: { type: "string" }, maxItems: 3 },
+    unknowns: { type: "array", items: { type: "string" }, maxItems: 3 },
+  },
+  required: [
+    "visible_details",
+    "detail_opportunity_present",
+    "submetrics",
+    "tier_adjustment",
+    "confidence",
+    "evidence",
+    "controllable_factors",
+    "unknowns",
+  ],
   additionalProperties: false,
 };
 
@@ -71,16 +123,18 @@ export const AURA_MODEL_OUTPUT_SCHEMA = {
           usable: { type: "boolean" },
           issues: { type: "array", items: { type: "string" }, maxItems: 6 },
           comparability_score: { type: "number", minimum: 0, maximum: 1 },
+          rating: { type: "string", enum: SCAN_QUALITY_RATING_ENUM },
         },
-        required: ["usable", "issues", "comparability_score"],
+        required: ["usable", "issues", "comparability_score", "rating"],
         additionalProperties: false,
       },
       categories: {
         type: "array",
         items: categorySchema,
-        minItems: 7,
-        maxItems: 7,
+        minItems: 5,
+        maxItems: 5,
       },
+      details: detailsSchema,
       strengths: { type: "array", items: { type: "string" }, maxItems: 3 },
       opportunities: { type: "array", items: { type: "string" }, maxItems: 3 },
       recommended_upgrades: {
@@ -91,7 +145,7 @@ export const AURA_MODEL_OUTPUT_SCHEMA = {
       },
       safety_flags: { type: "array", items: { type: "string" }, maxItems: 5 },
     },
-    required: ["scan_quality", "categories", "strengths", "opportunities", "recommended_upgrades", "safety_flags"],
+    required: ["scan_quality", "categories", "details", "strengths", "opportunities", "recommended_upgrades", "safety_flags"],
     additionalProperties: false,
   },
 } as const;

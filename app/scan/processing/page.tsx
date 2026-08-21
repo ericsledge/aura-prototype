@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { WizardShell } from "@/components/aura/WizardShell";
 import { track } from "@/lib/analytics/events";
 import {
   awardXp,
@@ -21,16 +20,16 @@ import { computeScoring } from "@/lib/scoring";
 import { buildComparison } from "@/lib/scoring/compare";
 import { AuraModelOutput, PendingImage } from "@/lib/types/aura";
 
-const STAGES = [
-  { key: "upload", label: "Securing your photos…" },
-  { key: "extract", label: "Analyzing Hair, Style & Grooming…" },
-  { key: "score", label: "Scoring your presentation…" },
-  { key: "plan", label: "Building your upgrade plan…" },
-] as const;
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Real AI takes anywhere from a few seconds to ~15s — no fixed schedule of
+// fake stages/percentages to promise a timeline we don't control. These
+// rotate on their own clock, independent of how long the actual call takes.
+const ROTATING_MESSAGES = [
+  "Analyzing your build…",
+  "Checking Face, Hair, Style, Physique, Presence and Details…",
+  "Separating scan quality from your Aura score…",
+  "Building your upgrade plan…",
+];
+const MESSAGE_INTERVAL_MS = 2600;
 
 /**
  * Real AI is the only path in production (OPENAI_API_KEY is always set on
@@ -66,9 +65,16 @@ async function getModelOutput(
 
 export default function ProcessingPage() {
   const router = useRouter();
-  const [stageIndex, setStageIndex] = useState(0);
+  const [messageIndex, setMessageIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const ranRef = useRef(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessageIndex((i) => (i + 1) % ROTATING_MESSAGES.length);
+    }, MESSAGE_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (ranRef.current) return;
@@ -87,10 +93,6 @@ export default function ProcessingPage() {
       const images = JSON.parse(raw) as PendingImage[];
       const draft = getDraft();
 
-      setStageIndex(0);
-      await delay(500);
-
-      setStageIndex(1);
       const usableCount = images.filter((i) => i.usable).length;
       const comparabilityScore = Math.min(1, 0.5 + 0.5 * (usableCount / images.length));
       const seedKey = images.map((i) => `${i.viewType}:${i.sizeBytes}:${i.width}x${i.height}`).join("|") + `|${draft.goal}`;
@@ -102,13 +104,19 @@ export default function ProcessingPage() {
       const baseline = draft.scanType === "rescan" && draft.baselineScanId ? await baselineScan() : null;
 
       const { modelOutput, model } = await getModelOutput(images, draft.goal ?? "overall_improvement", comparabilityScore, seedKey);
-      await delay(600);
 
-      setStageIndex(2);
+      // A capture problem is not character progression — an unusable scan
+      // never becomes a real baseline/rescan, never awards XP, and never
+      // enters scan history as if it were a real measurement.
+      if (!modelOutput.scan_quality.usable || modelOutput.scan_quality.rating === "retake") {
+        sessionStorage.setItem("aura.retakeIssues", JSON.stringify(modelOutput.scan_quality.issues));
+        sessionStorage.removeItem("aura.pendingScanImages");
+        track("scan_quality_retake_needed", { issues: modelOutput.scan_quality.issues });
+        router.push("/scan/retake-needed");
+        return;
+      }
+
       const scoring = computeScoring(modelOutput);
-      await delay(500);
-
-      setStageIndex(3);
 
       const scan = await createScan({
         scanType: draft.scanType,
@@ -163,46 +171,42 @@ export default function ProcessingPage() {
   }
 
   return (
-    <WizardShell step={5} title="Analyzing your scan" subtitle="This usually takes a few seconds.">
-      <div className="flex flex-col gap-4">
-        {STAGES.map((stage, i) => (
-          <div key={stage.key} className="flex items-center gap-3">
-            <div
-              className={`h-2 w-2 rounded-full ${
-                i < stageIndex ? "bg-success" : i === stageIndex ? "bg-accent animate-pulse" : "bg-surface-elevated"
-              }`}
-            />
-            <span className={i <= stageIndex ? "text-foreground" : "text-muted"}>{stage.label}</span>
-          </div>
-        ))}
-
-        {error === "unrecoverable" && (
-          <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-danger/10 p-4 text-sm text-danger">
-            <span>Your photos weren&apos;t found — this can happen after a page refresh. Please upload again.</span>
-            <button
-              onClick={() => router.push("/scan/upload")}
-              className="self-start rounded-full bg-danger/20 px-4 py-2 text-xs font-medium hover:bg-danger/30"
-            >
-              Back to upload
-            </button>
-          </div>
-        )}
-
-        {error === "retryable" && (
-          <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-danger/10 p-4 text-sm text-danger">
-            <span>Something went wrong while analyzing your photos.</span>
-            <button
-              onClick={() => {
-                ranRef.current = false;
-                run();
-              }}
-              className="self-start rounded-full bg-danger/20 px-4 py-2 text-xs font-medium hover:bg-danger/30"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+    <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col items-center justify-center gap-8 px-5 py-10 text-center">
+      <div className="relative flex h-40 w-40 items-center justify-center">
+        <div className="absolute inset-0 animate-spin rounded-full border-4 border-border-subtle border-t-accent" style={{ animationDuration: "1.6s" }} />
+        <span className="text-xs uppercase tracking-[0.2em] text-muted">Aura</span>
       </div>
-    </WizardShell>
+
+      <p key={messageIndex} className="animate-fade-up max-w-sm text-lg font-medium">
+        {ROTATING_MESSAGES[messageIndex]}
+      </p>
+
+      {error === "unrecoverable" && (
+        <div className="flex flex-col gap-3 rounded-2xl bg-danger/10 p-4 text-sm text-danger">
+          <span>Your photos weren&apos;t found — this can happen after a page refresh. Please upload again.</span>
+          <button
+            onClick={() => router.push("/scan/upload")}
+            className="self-center rounded-full bg-danger/20 px-4 py-2 text-xs font-medium hover:bg-danger/30"
+          >
+            Back to upload
+          </button>
+        </div>
+      )}
+
+      {error === "retryable" && (
+        <div className="flex flex-col gap-3 rounded-2xl bg-danger/10 p-4 text-sm text-danger">
+          <span>Something went wrong while analyzing your photos.</span>
+          <button
+            onClick={() => {
+              ranRef.current = false;
+              run();
+            }}
+            className="self-center rounded-full bg-danger/20 px-4 py-2 text-xs font-medium hover:bg-danger/30"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
