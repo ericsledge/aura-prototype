@@ -34,7 +34,10 @@ export async function analyzeWithOpenAI(images: AnalyzeImageInput[], goal: Goal)
 
   const response = await openai.chat.completions.create({
     model: MODEL,
-    temperature: 0.2, // low, not zero — some sampling variance is real and worth surfacing via the stability harness, but we don't want a chatty/creative model here
+    // gpt-5.6-* (reasoning models) reject any temperature other than the
+    // default (1) — confirmed via a live 400 from the API. Whatever run-to-run
+    // variance exists at the default is exactly what tools/stability-test.ts
+    // is for measuring; it's not something we can dial down for these models.
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

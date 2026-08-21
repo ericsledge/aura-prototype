@@ -72,7 +72,7 @@ async function main() {
     process.stdout.write(`  run ${i + 1}/${runs}... `);
     const response = await openai.chat.completions.create({
       model: MODEL,
-      temperature: 0.2,
+      // gpt-5.6-* rejects any temperature other than the default (1).
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: [{ type: "text", text: buildUserPrompt(goal) }, ...images] },
