@@ -11,11 +11,31 @@ import {
   AuraModelOutput,
   CategoryScore,
   Confidence,
+  ScoreTier,
   ScoringResult,
 } from "@/lib/types/aura";
 
 export const RUBRIC_VERSION = "aura-rubric-v0.1";
-export const SCORING_VERSION = "aura-scoring-v0.1";
+// v0.2: category score now derives from a discrete tier + bounded adjustment
+// instead of a free 0-100 model estimate — see the ScoreTier comment in
+// lib/types/aura.ts. A real run-to-run stability test on identical photos
+// failed badly under v0.1 (11 pt OVR range, up to 26 pts in one category);
+// this is the fix, and rubric/scoring versions are bumped so old scans stay
+// legible as having used a different rubric.
+export const SCORING_VERSION = "aura-scoring-v0.2";
+
+// Base value for each tier: the deterministic system owns these constants,
+// never the model. tier_adjustment (-5..+5) only nudges within a tier, so a
+// tier flip — which now requires the model to cross a real qualitative
+// threshold rather than just land on a different number — is the only way
+// score movement between runs.
+export const TIER_BASE: Record<ScoreTier, number> = {
+  needs_work: 40,
+  developing: 55,
+  solid: 70,
+  strong: 82,
+  excellent: 92,
+};
 
 // Equal-ish starting weights per §13/§76 ("start with equal-ish weights, then test
 // whether user goals should alter emphasis"). Kept as a frozen, versioned constant
@@ -80,7 +100,8 @@ export function computeScoring(model: AuraModelOutput): ScoringResult {
     }
     const penalty = CONFIDENCE_PENALTY[raw.confidence];
     const comparabilityPenalty = 0.85 + 0.15 * model.scan_quality.comparability_score;
-    const score = clamp(Math.round(raw.provisional_score * penalty * comparabilityPenalty), 0, 100);
+    const tierScore = TIER_BASE[raw.tier] + clamp(raw.tier_adjustment, -5, 5);
+    const score = clamp(Math.round(tierScore * penalty * comparabilityPenalty), 0, 100);
     return {
       category: cat,
       score,

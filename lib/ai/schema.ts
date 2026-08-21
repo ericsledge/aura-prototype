@@ -2,9 +2,11 @@
 // exactly the AuraModelOutput shape (lib/types/aura.ts) instead of free-form
 // prose. This is the "Stage 1: input-quality and observable feature
 // extraction" contract from the Bible (§78) — the model only ever supplies
-// evidence and provisional scores; lib/scoring computes the real numbers.
+// evidence and a discrete quality tier per category; lib/scoring computes the
+// real numbers (see the ScoreTier comment in lib/types/aura.ts for why this
+// isn't a free continuous score).
 
-import { AURA_CATEGORIES } from "@/lib/types/aura";
+import { AURA_CATEGORIES, SCORE_TIERS } from "@/lib/types/aura";
 
 const CONFIDENCE_ENUM = ["low", "medium", "high"];
 const BAND_ENUM = ["low", "medium", "high"];
@@ -15,13 +17,14 @@ const categorySchema = {
   type: "object",
   properties: {
     name: { type: "string", enum: [...AURA_CATEGORIES] },
-    provisional_score: { type: "integer", minimum: 0, maximum: 100 },
+    tier: { type: "string", enum: [...SCORE_TIERS] },
+    tier_adjustment: { type: "integer", minimum: -5, maximum: 5 },
     confidence: { type: "string", enum: CONFIDENCE_ENUM },
     evidence: { type: "array", items: { type: "string" }, maxItems: 4 },
     controllable_factors: { type: "array", items: { type: "string" }, maxItems: 3 },
     unknowns: { type: "array", items: { type: "string" }, maxItems: 3 },
   },
-  required: ["name", "provisional_score", "confidence", "evidence", "controllable_factors", "unknowns"],
+  required: ["name", "tier", "tier_adjustment", "confidence", "evidence", "controllable_factors", "unknowns"],
   additionalProperties: false,
 };
 

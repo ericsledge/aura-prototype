@@ -35,9 +35,11 @@ export async function analyzeWithOpenAI(images: AnalyzeImageInput[], goal: Goal)
   const response = await openai.chat.completions.create({
     model: MODEL,
     // gpt-5.6-* (reasoning models) reject any temperature other than the
-    // default (1) — confirmed via a live 400 from the API. Whatever run-to-run
-    // variance exists at the default is exactly what tools/stability-test.ts
-    // is for measuring; it's not something we can dial down for these models.
+    // default (1) — confirmed via a live 400 from the API. reasoning_effort
+    // is the lever we can pull instead: more deliberation before answering,
+    // tested via tools/stability-test.ts to actually reduce run-to-run
+    // judgment variance on the more subjective categories (not just assumed).
+    reasoning_effort: "high",
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

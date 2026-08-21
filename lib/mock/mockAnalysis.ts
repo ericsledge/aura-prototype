@@ -9,8 +9,29 @@
 // `lib/ai/analyze.ts` that hits OpenAI and returns the same `AuraModelOutput` shape.
 // Nothing downstream (scoring, comparison, UI) needs to change.
 
-import { AURA_CATEGORIES, AuraCategory, AuraModelOutput, Confidence, Goal, MissionType, RecommendedUpgrade } from "@/lib/types/aura";
+import { AURA_CATEGORIES, AuraCategory, AuraModelOutput, Confidence, Goal, MissionType, RecommendedUpgrade, ScoreTier } from "@/lib/types/aura";
 import { ScoringResult } from "@/lib/types/aura";
+import { TIER_BASE } from "@/lib/scoring";
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+// Converts the mock's internal continuous 0-100 estimate into the same
+// tier + tier_adjustment shape the real AI contract uses (lib/types/aura.ts),
+// so the mock stays a valid stand-in for real model output.
+function scoreToTier(score: number): { tier: ScoreTier; tier_adjustment: number } {
+  let closest: ScoreTier = "needs_work";
+  let closestDist = Infinity;
+  for (const tier of Object.keys(TIER_BASE) as ScoreTier[]) {
+    const dist = Math.abs(score - TIER_BASE[tier]);
+    if (dist < closestDist) {
+      closest = tier;
+      closestDist = dist;
+    }
+  }
+  return { tier: closest, tier_adjustment: clamp(Math.round(score - TIER_BASE[closest]), -5, 5) };
+}
 
 function mulberry32(seed: number) {
   let a = seed;
@@ -252,9 +273,17 @@ export function runMockAnalysis(input: MockAnalysisInput): AuraModelOutput {
       evidence.push(bank[Math.floor(rng() * bank.length)]);
     }
 
+    const { tier, tier_adjustment } = scoreToTier(provisionalScore);
+
     return {
       name: cat,
-      provisional_score: provisionalScore,
+      // Internal-only field, not part of the AuraModelOutput contract — kept
+      // so this function's own sorting/selection logic (below) has a
+      // continuous value to work with, exactly like the real deterministic
+      // scoring layer will reconstruct from tier + tier_adjustment.
+      _internalScore: provisionalScore,
+      tier,
+      tier_adjustment,
       confidence,
       evidence: Array.from(new Set(evidence)),
       controllable_factors: [CATEGORY_CONTROLLABLE[cat]],
@@ -262,18 +291,18 @@ export function runMockAnalysis(input: MockAnalysisInput): AuraModelOutput {
     };
   });
 
-  const sorted = [...categories].sort((a, b) => b.provisional_score - a.provisional_score);
+  const sorted = [...categories].sort((a, b) => b._internalScore - a._internalScore);
   const strengths = sorted.slice(0, 2).map((c) => STRENGTH_TEMPLATES[c.name]);
   const opportunities = sorted
     .slice(-3)
     .reverse()
     .map((c) => OPPORTUNITY_TEMPLATES[c.name]);
 
-  const lowestThree = [...categories].sort((a, b) => a.provisional_score - b.provisional_score).slice(0, 3);
+  const lowestThree = [...categories].sort((a, b) => a._internalScore - b._internalScore).slice(0, 3);
   const unsortedUpgrades: RecommendedUpgrade[] = lowestThree.map((c) => {
     const bank = UPGRADE_BANK[c.name];
     const template = bank[Math.floor(rng() * bank.length)];
-    const impact_band: RecommendedUpgrade["impact_band"] = c.provisional_score < 60 ? "high" : c.provisional_score < 75 ? "medium" : "low";
+    const impact_band: RecommendedUpgrade["impact_band"] = c._internalScore < 60 ? "high" : c._internalScore < 75 ? "medium" : "low";
     return {
       category: c.name,
       title: template.title,

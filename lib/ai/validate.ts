@@ -3,7 +3,7 @@
 // script (tools/stability-test.ts, run via tsx outside Next's server context)
 // can share the exact same validation instead of two copies drifting apart.
 
-import { AURA_CATEGORIES, AuraCategory, AuraModelOutput } from "@/lib/types/aura";
+import { AURA_CATEGORIES, AuraCategory, AuraModelOutput, SCORE_TIERS } from "@/lib/types/aura";
 
 /**
  * Structural + semantic validation beyond what the JSON schema already
@@ -34,8 +34,11 @@ export function validateModelOutput(value: unknown): AuraModelOutput {
     }
     if (seen.has(cat.name)) throw new Error(`ai_validation_failed: duplicate category "${cat.name}"`);
     seen.add(cat.name);
-    if (typeof cat.provisional_score !== "number" || cat.provisional_score < 0 || cat.provisional_score > 100) {
-      throw new Error(`ai_validation_failed: bad score for "${cat.name}"`);
+    if (!SCORE_TIERS.includes(cat.tier)) {
+      throw new Error(`ai_validation_failed: bad tier for "${cat.name}"`);
+    }
+    if (typeof cat.tier_adjustment !== "number" || cat.tier_adjustment < -5 || cat.tier_adjustment > 5) {
+      throw new Error(`ai_validation_failed: bad tier_adjustment for "${cat.name}"`);
     }
     if (!["low", "medium", "high"].includes(cat.confidence)) {
       throw new Error(`ai_validation_failed: bad confidence for "${cat.name}"`);

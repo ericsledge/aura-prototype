@@ -37,6 +37,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local test photos for tools/stability-test.ts — never commit real people's photos
+/tools/test-photos/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

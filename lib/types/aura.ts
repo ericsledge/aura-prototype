@@ -57,9 +57,21 @@ export interface ScanQuality {
   comparability_score: number; // 0-1
 }
 
+// A free continuous 0-100 "provisional_score" measurably destabilizes model
+// output run-to-run (confirmed via tools/stability-test.ts: identical photos
+// swung 11 points OVR / up to 26 points in a single category across 5 runs).
+// Forcing a discrete qualitative tier first, with only a small bounded
+// adjustment, bounds how far any one run can swing by construction — the
+// model has to cross a real qualitative threshold to change the outcome,
+// not just land on a different number. lib/scoring/index.ts converts
+// tier + tier_adjustment into the final numeric score deterministically.
+export const SCORE_TIERS = ["needs_work", "developing", "solid", "strong", "excellent"] as const;
+export type ScoreTier = (typeof SCORE_TIERS)[number];
+
 export interface CategoryModelOutput {
   name: AuraCategory;
-  provisional_score: number; // 0-100
+  tier: ScoreTier;
+  tier_adjustment: number; // -5 to 5, fine positioning within the tier only — never a substitute for picking the right tier
   confidence: Confidence;
   evidence: string[];
   controllable_factors: string[];
