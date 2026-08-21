@@ -37,38 +37,21 @@ export default function Landing() {
           Level Up Your Real-Life Build
         </h1>
         <p className="max-w-xl text-lg text-muted">
-          Scan your current presentation. Get your highest-impact upgrades. Rescan to see what actually changed.
+          Get your Aura score, discover your highest-impact upgrades, and track how your presentation improves
+          over time.
         </p>
         <LinkButton href="/scan/age-gate" size="lg" className="mt-2">
           Get My Aura Score
         </LinkButton>
-        <p className="max-w-sm text-xs text-muted">
-          Aura measures your controllable presentation — grooming, style, and photo setup — not your worth,
-          health, or identity. You can delete your photos and data anytime.
-        </p>
       </div>
 
-      <div className="flex flex-col items-center gap-4">
-        <span className="text-xs uppercase tracking-[0.2em] text-accent-soft">Example progression</span>
-        <div className="flex items-center gap-6">
-          <div className="text-center">
-            <p className="text-xs text-muted">Starting Aura</p>
-            <p className="text-3xl font-bold tabular-nums text-muted">68</p>
-          </div>
-          <span className="text-2xl text-muted">→</span>
-          <OvrDial score={82} confidence="high" size={180} delta={14} />
-        </div>
-        <p className="max-w-sm text-sm text-muted">
-          Two upgrades, one rescan. Your real score comes from your own standardized photos — this is what
-          progress looks like once you act on it.
-        </p>
-      </div>
+      <OvrDial locked size={200} />
 
       <div className="grid w-full gap-4 sm:grid-cols-3">
         {[
-          { title: "Scan", body: "Three standardized photos: front, 3/4, and full-body." },
-          { title: "Improve", body: "Your top 3 controllable upgrades — ranked by impact and effort." },
-          { title: "Rescan", body: "Make the change, then measure what actually moved." },
+          { title: "Scan", body: "See your current build." },
+          { title: "Upgrade", body: "Get personalized missions." },
+          { title: "Level Up", body: "Make real changes and rescan to see what moved." },
         ].map((step) => (
           <div key={step.title} className="rounded-2xl border border-border-subtle bg-surface p-5 text-left">
             <h3 className="font-semibold">{step.title}</h3>
@@ -76,6 +59,11 @@ export default function Landing() {
           </div>
         ))}
       </div>
+
+      <p className="max-w-sm text-xs text-muted">
+        Aura measures your controllable presentation — grooming, style, and photo setup — not your worth, health,
+        or identity. You can delete your photos and data anytime.
+      </p>
     </div>
   );
 }
